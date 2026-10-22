@@ -1,0 +1,15 @@
+{
+  "//": "Copy to pipeline.local.json next to pipeline.config.json. It is gitignored: these values never reach the public repository.",
+  "decisions": {
+    "file": "~/<folder outside the repository>/raccoon-vtt-decisions.md"
+  },
+  "scan": {
+    "private": ["<private-domain>", "<deploy-host>", "<owner's name>", "<server app folder>"]
+  },
+  "deploy": {
+    "command": "~/<folder outside the repository>/deploy.sh {name} {tip} {prev}"
+  },
+  "cleanup": {
+    "archiveDir": "~/<scratch folder>/reviews"
+  }
+}

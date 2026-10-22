@@ -1,0 +1,102 @@
+{
+  "//": "The raccoon-vtt profile: a self-hosted virtual tabletop web app (Node 24, React 19, Postgres, pnpm), built by a coordinator running designers, builders, reviewers and live play agents. Private values live in pipeline.local.json (see pipeline.local.example.json).",
+  "project": "raccoon-vtt",
+  "trunk": "main",
+  "remote": "origin",
+  "intake": {
+    "quoteIn": ["build", "design", "review", "live-play", "followups"]
+  },
+  "brief": {
+    "preamble": "agent-preamble.md",
+    "requirePreambleIn": ["build", "live-play", "followups"]
+  },
+  "design": {
+    "targetLines": 400,
+    "maxLines": 520,
+    "uiHeading": "^#{2,4} .*\\b(UI|UX)\\b",
+    "requiredSections": ["Tests", "Build plan"]
+  },
+  "decisions": {
+    "guessMode": true
+  },
+  "commits": {
+    "types": ["feat", "fix", "chore", "docs", "refactor", "test", "perf", "build", "ci"],
+    "forbiddenTrailers": ["^co-authored-by:", "^generated-by:", "^signed-off-by:", "generated with", "noreply@anthropic\\.com", "\\bclaude\\b", "\\banthropic\\b"]
+  },
+  "fastLane": {
+    "maxFiles": 8,
+    "forbiddenPaths": ["shared/model.ts", "shared/protocol.ts", "shared/permissions.ts", "shared/migrate.ts", "db/**", "server/auth/**"]
+  },
+  "checks": {
+    "parallel": [
+      { "name": "typecheck", "run": "pnpm -s typecheck" },
+      { "name": "unit", "run": "pnpm -s test" },
+      { "name": "build", "run": "pnpm -s build" }
+    ],
+    "integration": [
+      { "name": "dice-chunk", "run": "node scripts/three-chunk.ts" },
+      { "name": "test:int", "run": "pnpm -s test:int" }
+    ],
+    "e2e": {
+      "command": "node --test --test-concurrency=1 e2e/{file}.e2e.ts",
+      "files": ["areas", "attach", "bardock-sweep-large", "bardock-sweep-small", "bardock", "characters", "combat", "companions", "desk", "dice", "display", "dmphone", "fold", "groupsave", "guide", "kit", "layout", "maps", "notes", "options-dm-100", "options-dm-130", "options-floor-dm", "options-floor-player", "options-player", "options", "paneltabs", "paste", "pcstats", "pdf", "playerphone", "reach-player-100", "reach-player-130", "reach", "regress", "resync", "rolls", "savespell", "shortcuts", "sideheaders", "size", "smoke", "splitpanel", "stickyfoot", "swipe", "table", "tokenpanel", "tools", "traps", "vision"],
+      "always": ["reach"],
+      "beforeEach": "psql -q \"$DATABASE_URL\" -c \"delete from rate_events where key like 'ok:%' or key like 'create:%'\" 2>/dev/null || true",
+      "timeoutSec": 1500
+    },
+    "stopOnFailure": true,
+    "keepAwake": true
+  },
+  "tests": {
+    "pattern": "(^|/)e2e/|\\.(test|itest|e2e)\\.tsx?$"
+  },
+  "mutation": {
+    "required": true,
+    "command": "node --test {file}",
+    "link": ["node_modules"]
+  },
+  "scan": {
+    "private": ["<private-domain>", "<deploy-host>"],
+    "allowedUrlHosts": ["example.com", "localhost", "127.0.0.1", "dndbeyond.com", "github.com"],
+    "emDashInContent": "error"
+  },
+  "push": {
+    "branches": ["ci/*"],
+    "requireScan": true,
+    "public": true
+  },
+  "ci": {
+    "workflow": "CI",
+    "pollSec": 60,
+    "timeoutMin": 90
+  },
+  "review": {
+    "provider": "auto",
+    "minReviewers": 2
+  },
+  "deploy": {
+    "match": "deploy\\.sh",
+    "tipArg": 2,
+    "runBy": "agent",
+    "requiredChecks": ["backup", "health", "restarts", "load", "http"]
+  },
+  "notify": {
+    "command": ["agent-notify", "{message}"]
+  },
+  "docs": {
+    "featureList": "FEATURES.md",
+    "guide": "docs/dm-guide.md",
+    "shortcutSources": ["client/state/shortcuts.ts"],
+    "shortcutDocs": ["FEATURES.md"],
+    "behaviorPaths": ["client/**", "server/**", "shared/**"],
+    "screenshots": ["docs/dm-guide/*.webp"],
+    "separateCommit": true
+  },
+  "livePlay": {
+    "maxFilesPerFix": 8
+  },
+  "cleanup": {
+    "databaseList": "PGPASSWORD=\"$PGPASSWORD\" psql -h localhost -p 5434 -U raccoon -lqt | cut -d'|' -f1",
+    "databaseDrop": "PGPASSWORD=\"$PGPASSWORD\" dropdb -h localhost -p 5434 -U raccoon --force {db}"
+  }
+}
