@@ -1,0 +1,30 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|shell|exec_command|local_shell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PIPELINE_BIN gate",
+            "timeout": 90,
+            "statusMessage": "Checking the pipeline gate"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|shell|exec_command|local_shell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "PIPELINE_BIN mirror-hook",
+            "timeout": 90,
+            "statusMessage": "Recording pipeline statuses"
+          }
+        ]
+      }
+    ]
+  }
+}
