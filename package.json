@@ -1,0 +1,16 @@
+{
+  "name": "agent-pipeline",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A stage ledger, gate and GitHub status mirror for an agent delivery process: design, build, review, CI, deploy, live play and docs.",
+  "type": "module",
+  "bin": {
+    "pipeline": "bin/pipeline"
+  },
+  "scripts": {
+    "test": "node --test 'test/*.test.mjs'"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

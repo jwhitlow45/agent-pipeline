@@ -1,0 +1,73 @@
+{
+  "//": "agent-pipeline config. Committed. Private values go in pipeline.local.json, which is gitignored. See docs/config.md.",
+  "project": "my-app",
+  "trunk": "main",
+  "remote": "origin",
+  "brief": {
+    "preamble": "agent-preamble.md"
+  },
+  "design": {
+    "targetLines": 400,
+    "maxLines": 520,
+    "requiredSections": ["Tests", "Build plan"]
+  },
+  "decisions": {
+    "file": "~/decisions/my-app-decisions.md",
+    "guessMode": false
+  },
+  "checks": {
+    "parallel": [
+      { "name": "typecheck", "run": "npm run -s typecheck" },
+      { "name": "unit", "run": "npm test --silent" },
+      { "name": "build", "run": "npm run -s build" }
+    ],
+    "integration": [
+      { "name": "integration", "run": "npm run -s test:int" }
+    ],
+    "e2e": {
+      "command": "node --test --test-concurrency=1 e2e/{file}.e2e.ts",
+      "files": ["login", "checkout", "settings", "smoke"],
+      "always": ["smoke"],
+      "beforeEach": null,
+      "timeoutSec": 1500
+    }
+  },
+  "scan": {
+    "private": ["<private-domain>", "<deploy-host>"],
+    "allowedUrlHosts": ["example.com", "localhost", "127.0.0.1"]
+  },
+  "push": {
+    "branches": ["ci/*"],
+    "public": true
+  },
+  "ci": {
+    "workflow": "CI"
+  },
+  "review": {
+    "provider": "auto",
+    "minReviewers": 2
+  },
+  "deploy": {
+    "command": "./scripts/deploy.sh {name} {tip} {prev}",
+    "match": "scripts/deploy\\.sh",
+    "tipArg": 2,
+    "runBy": "user",
+    "requiredChecks": ["backup", "health", "load", "http"]
+  },
+  "notify": {
+    "command": ["agent-notify", "{message}"]
+  },
+  "docs": {
+    "featureList": "FEATURES.md",
+    "guide": "docs/guide.md",
+    "shortcutSources": [],
+    "shortcutDocs": [],
+    "behaviorPaths": ["src/**", "server/**"],
+    "screenshots": ["docs/guide/*.webp"]
+  },
+  "cleanup": {
+    "databaseList": null,
+    "databaseDrop": null,
+    "archiveDir": null
+  }
+}
