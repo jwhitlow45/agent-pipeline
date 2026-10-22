@@ -1,0 +1,29 @@
+{
+  "description": "agent-pipeline: the gate refuses a shell command whose earlier stages have not passed, and the mirror records pushes and sets pipeline/<stage> statuses. Both act only in repositories with a pipeline.config.json.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/pipeline gate",
+            "timeout": 90
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/pipeline mirror-hook",
+            "timeout": 90
+          }
+        ]
+      }
+    ]
+  }
+}

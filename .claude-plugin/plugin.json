@@ -1,0 +1,10 @@
+{
+  "name": "agent-pipeline",
+  "version": "0.1.0",
+  "description": "The design, build, review, deploy and live play process for agent teams, with a stage ledger, a gate that refuses steps whose earlier stages have not passed, and pipeline/<stage> GitHub commit statuses.",
+  "author": {
+    "name": "jwhitlow45"
+  },
+  "repository": "https://github.com/jwhitlow45/agent-pipeline",
+  "keywords": ["process", "review", "ci", "deploy", "gate", "jj"]
+}

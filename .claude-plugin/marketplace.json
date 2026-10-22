@@ -1,0 +1,13 @@
+{
+  "name": "agent-pipeline",
+  "owner": {
+    "name": "jwhitlow45"
+  },
+  "plugins": [
+    {
+      "name": "agent-pipeline",
+      "source": ".",
+      "description": "The agent delivery process, its stage ledger and its gate hooks."
+    }
+  ]
+}
