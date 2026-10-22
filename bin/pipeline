@@ -1,0 +1,16 @@
+#!/bin/sh
+# Runs pipeline.mjs with a node, gh and jj that hooks can find even when the calling app (such as a
+# desktop agent) starts without the login shell's PATH.
+PATH="$PATH:$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin"
+node=$(command -v node || ls -d "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | sort -V | tail -1)
+if [ -z "$node" ]; then
+  echo "pipeline: node not found" >&2
+  exit 1
+fi
+self=$0
+# Follow the symlink an install puts on PATH, so the script finds its lib folder.
+while [ -L "$self" ]; do
+  link=$(readlink "$self")
+  case $link in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
+done
+exec "$node" "$(dirname "$self")/pipeline.mjs" "$@"
