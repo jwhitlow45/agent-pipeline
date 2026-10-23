@@ -139,6 +139,10 @@ It is not a sandbox. These still run unseen:
 - a program earlier on PATH than git, jj or gh
 - a workflow that starts on a comment, a label or a push to a `ci/*` branch, which the gate never sees as a deploy
 
+The gate's own reads (jj, git and gh, to read config and the remote) run in the hook's environment, not in the agent's shell. A variable, function or alias that the agent's shell gets from a startup file is invisible to them. The gate refuses writes to the startup files, Claude Code's shell snapshots, and the config files git, jj, gh, ssh, curl and wget read, so what it reads and what the agent's command runs start from the same files. A variable the agent sets in a persistent shell is outside that.
+
+Paths are compared as the disk stores them: links are followed, and on a volume that ignores case (the macOS default) `.GIT/config` is `.git/config` and `GIT` is git.
+
 The settings above are what holds then.
 
 ## 8. Where state lives
