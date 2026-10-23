@@ -69,7 +69,14 @@ describe('intake, briefs and design', () => {
     box.write('docs/design-dark.md', '# Dark mode\n## Rules\n## UI and UX\n## Tests\nA late edit.\n');
     const changed = box.cli(['design', '--run', 'feat', '--note', 'docs/design-dark.md']);
     assert.equal(changed.code, 1);
-    assert.match(changed.out, /changed after its design review reached consensus/);
+    assert.match(changed.out, /changed after its design review reached consensus \(round 2\)/);
+    // The binding survives the refusal: trying again, or claiming a re-review, changes nothing.
+    assert.equal(box.cli(['design', '--run', 'feat', '--note', 'docs/design-dark.md']).code, 1);
+    assert.match(box.cli(['design', '--run', 'feat', '--note', 'docs/design-dark.md', '--re-review']).out, /needs a consensus newer than the one the note was bound to \(round 2 of darkdesign\)/);
+    writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, 'darkdesign.json'), JSON.stringify({ topic: 'darkdesign', repo: null, identity: null, folder: join(box.root, 'review-darkdesign'), status: 'consensus', rounds: [{ n: 1 }, { n: 2 }, { n: 3 }], consensus: { tip: null, commits: [], reviewers: 'model-a xhigh, model-b xhigh', rounds: 3 } }));
+    const again = box.cli(['design', '--run', 'feat', '--note', 'docs/design-dark.md', '--re-review']);
+    assert.equal(again.code, 0, again.all);
+    assert.equal(box.run('feat').stages.design.reviewed.rounds, 3);
   });
 });
 
