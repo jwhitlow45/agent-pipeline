@@ -16,6 +16,7 @@ import { checkNote, noteLines } from '../lib/plan.mjs';
 import { coverage, reviewPassed } from '../lib/review.mjs';
 import { globToRegExp, matchesAny } from '../lib/util.mjs';
 import { deployCheckProblems } from '../lib/ship.mjs';
+import { stageFor } from '../lib/mirror.mjs';
 
 const EM = '\u2014';
 const config = (overrides = {}) => structuredClone({ ...DEFAULTS, ...overrides });
@@ -238,4 +239,14 @@ test('the plugin hooks cover every Claude Code tool that runs a command, and the
   const { hooks } = read('hooks/hooks.json');
   for (const event of ['PreToolUse', 'PostToolUse']) assert.deepEqual(hooks[event].map((entry) => entry.matcher.split('|').sort()), [['Bash', 'Monitor', 'PowerShell']]);
   assert.ok(read('.claude-plugin/marketplace.json').description);
+});
+
+test('a stage recorded on one commit is pending on any other, even when nothing marked it stale', () => {
+  const [old, next] = ['a'.repeat(40), 'b'.repeat(40)];
+  const run = { tip: next, stages: { intake: { state: 'passed', summary: 'words' }, scan: { state: 'passed', tip: old, summary: 'clean' }, ci: { state: 'passed', tip: next, summary: 'green' } } };
+  assert.equal(stageFor({}, run, 'scan', next).state, 'pending');
+  assert.match(stageFor({}, run, 'scan', next).summary, /recorded on aaaaaaaaaaaa, not this commit/);
+  assert.equal(stageFor({}, run, 'ci', next).state, 'passed');
+  assert.equal(stageFor({}, run, 'intake', next).state, 'passed');
+  assert.equal(stageFor({}, run, 'docs', next), null);
 });
