@@ -504,6 +504,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'gh release download v1 --output .git/config', 2, /inside a .git or .jj folder/],
     ['repo', 'gh release download v1 -D .git/hooks', 2, /inside a .git or .jj folder/],
     ['repo', 'git grep --open-files-in-pag=printf pipeline -- README.md', 2, /--open-files-in-pag runs another program/],
+    ['repo', 'git grep -iOprintf pipeline -- README.md', 2, /-iOprintf runs another program/],
     ['repo', 'git grep -Oprintf pipeline', 2, /-Oprintf runs another program/],
     ['repo', 'jj diff --tool sh', 2, /jj diff --tool is not an option the gate reads/],
     ['repo', 'jj log --too=sh', 2, /not an option the gate reads/],
@@ -545,6 +546,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     // R4: one parse per tool takes clusters apart before any value is checked (PA-56, PA-57, R4-2).
     ['repo', "curl https://api.github.com/repos/x/y -sH 'Authorization: Bearer fixture'", 2, /sends a credential/],
     ['repo', 'curl https://api.github.com/repos/x/y -sH @headers.txt', 2, /reads a header from a file/],
+    ['repo', 'curl https://api.github.com/repos/x/y -sH=@headers.txt', 2, /reads a header from a file/],
     ['repo', "curl https://api.github.com/repos/x/y -w '%output{.git/config}changed'", 2, /through curl's %output\{\}|writes a file through %output/],
     ['repo', "curl https://api.github.com/repos/x/y -sw '%output{>>~/.zshenv}x'", 2, /through curl's %output\{\}/],
     ['repo', 'curl https://api.github.com/repos/x/y -w @format.txt', 2, /reads curl's -w format from a file/],
@@ -876,6 +878,9 @@ describe('what the gate cannot read refuses (R4 sweep)', () => {
   const other = join(box.root, 'other');
   const bare = join(box.root, 'bare');
   box.sh(`git clone -q https://github.com/${SLUG}.git ${JSON.stringify(plain)}`, box.root);
+  // A git repository no one registered, whose own tree holds a pipeline config.
+  const unregistered = join(box.root, 'unregistered');
+  box.sh(`git init -q ${JSON.stringify(unregistered)} && cd ${JSON.stringify(unregistered)} && echo '{}' > pipeline.config.json && git remote add origin https://github.com/other-owner/other.git`, box.root);
   box.sh('i=0; while [ $i -lt 45 ]; do ln -s l$((i+1)) l$i; i=$((i+1)); done; ln -s loopb loopa; ln -s loopa loopb; ln -s l40 short', box.root);
   // A jj repository without the pipeline whose remote cannot be read, and one with no remote at all.
   for (const [dir, remote] of [[other, join(box.root, 'missing.git')], [bare, null]]) {
@@ -885,7 +890,8 @@ describe('what the gate cannot read refuses (R4 sweep)', () => {
     box.commit('chore: one', { 'a.txt': 'a\n' }, dir);
     box.sh('jj bookmark set x -r @-', dir);
   }
-  runRows(box, { repo: box.repo, root: box.root, plain, other, bare }, [
+  runRows(box, { repo: box.repo, root: box.root, plain, other, bare, unregistered }, [
+    ['unregistered', 'git push origin HEAD:refs/heads/main', 2, /a git clone of a repository with the pipeline that jj does not know/],
     // A heredoc the input ends inside runs to the end, as the shells read it.
     ['repo', 'cat > ~/.zshenv <<Z', 2, /shell startup file/],
     ['repo', 'cp notes.txt .claude/settings.local.json <<Z\nbody', 2, /agent settings/],
@@ -919,6 +925,7 @@ describe('what the gate cannot read refuses (R4 sweep)', () => {
     ['bare', './run.sh', 2, /pipeline\.config\.json cannot be read .*cannot tell whether this runs the deploy command/],
     ['bare', 'ls', 0],
     ['bare', 'jj log -r @', 0],
+    ['bare', 'Get-ChildItem', 2, /cannot tell whether this PowerShell line runs the deploy command/, { tool_name: 'PowerShell' }],
   ]);
 });
 
@@ -1167,7 +1174,7 @@ describe('the workflow GitHub runs is the one the gate reads', () => {
     ['repo', 'gh workflow run ci.yml --ref ci/twice', 2, /sets environment twice/],
     ['repo', 'gh workflow run ci.yml --ref ci/twojobs', 2, /job ship repeats/],
     ['repo', 'gh workflow run ci.yml --ref ci/nojobs', 2, /has no top-level jobs/],
-    ['repo', 'gh workflow run ci.yml --ref ci/linked', 2, /not a plain file/],
+    ['repo', 'gh workflow run ci.yml --ref ci/linked', 2, /cannot read \.github\/workflows\/ci\.yml at \w+, the commit GitHub runs it from: it is a blob \(mode 120000\), not a plain file/],
     ['repo', 'gh workflow run ci.yml --ref ci/callee', 2, /never run a production deploy/],
     ['repo', 'gh run rerun 34', 2, /never run a production deploy/],
   ]);

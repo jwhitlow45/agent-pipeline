@@ -1,10 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { guardOf, lockStep, withLock } from '../lib/lock.mjs';
+import { guardOf, lockStep, realIo, withLock } from '../lib/lock.mjs';
 import { DeadlineError, setDeadline } from '../lib/util.mjs';
 import { tempDir } from './helpers.mjs';
 
@@ -50,6 +50,39 @@ test('a hook deadline bounds the wait for a lock', () => {
     assert.ok(Date.now() - started < 5000);
   } finally {
     setDeadline(null);
+  }
+});
+
+// R4-4: a breaker that runs out of time mid-break, by the hook's deadline or by its own wait, removes
+// the guard and the aside it made before it fails, whichever step it stopped after.
+test('a breaker that runs out of time mid-break leaves no guard or aside behind', () => {
+  const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+  for (const [stop, after] of [['deadline', 'guard'], ['deadline', 'aside'], ['wait', 'guard'], ['wait', 'aside']]) {
+    const dir = fresh();
+    const path = join(dir, 'state.json');
+    const lock = `${path}.lock`;
+    hold(lock, { token: 'dead', pid: deadPid() });
+    const outOfTime = () => (stop === 'deadline' ? setDeadline(-1) : pause(120));
+    const io = {
+      ...realIo,
+      create(target, me) {
+        const made = realIo.create(target, me);
+        if (made && after === 'guard' && target === guardOf(lock, 'dead')) outOfTime();
+        return made;
+      },
+      rename(from, to) {
+        const moved = realIo.rename(from, to);
+        if (moved && after === 'aside' && from === lock) outOfTime();
+        return moved;
+      },
+    };
+    try {
+      assert.throws(() => withLock(path, () => 'ran', { waitMs: stop === 'wait' ? 60 : 60_000, io }), stop === 'deadline' ? DeadlineError : /is locked by another process/);
+    } finally {
+      setDeadline(null);
+    }
+    const left = readdirSync(dir);
+    assert.deepEqual(left, after === 'guard' ? ['state.json.lock'] : [], `${stop} after ${after} left ${left.join(', ')}`);
   }
 });
 

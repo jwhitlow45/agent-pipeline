@@ -137,6 +137,9 @@ describe('a design bound to a skip', () => {
     box.write('docs/design-skp3.md', '# Skip\n## Rules\n## UI and UX\n## Build plan\n## Tests\nAn edit.\n');
     consensus('skp3design', 2, null);
     assert.match(box.cli(['design', '--run', 'skp3', '--note', 'docs/design-skp3.md', '--re-review']).out, /recorded after the skip, and this one has no time recorded/);
+    // One recorded before the skip is the review the skip set aside.
+    consensus('skp3design', 2, '2000-01-01T00:00:00Z');
+    assert.match(box.cli(['design', '--run', 'skp3', '--note', 'docs/design-skp3.md', '--re-review']).out, /recorded after the skip, and this one came before it/);
   });
 });
 
@@ -945,6 +948,21 @@ describe('pipeline doctor', () => {
     assert.match(box.cli(['doctor']).out, /missing +\S+ runs the pipeline's pre-push hook\. \S+pre-push is not executable, so git skips it/);
     box.sh(`rm -f .git/hooks/pre-push && ln -s ${JSON.stringify(hook)} .git/hooks/pre-push`);
     assert.match(box.cli(['doctor']).out, /ok +\S+ runs the pipeline's pre-push hook/);
+  });
+
+  // A registered folder git no longer finds a repository in runs no hook.
+  test('names a registered folder that is no longer a repository', () => {
+    box.ghScript([...complete, environments(true), repoRule(false)]);
+    const gone = join(box.root, 'not-a-repo');
+    mkdirSync(gone, { recursive: true });
+    const registry = join(box.env.AGENT_PIPELINE_STATE, 'repos.json');
+    const saved = readFileSync(registry, 'utf8');
+    const entries = JSON.parse(saved);
+    entries.repos['store:gone'] = { identity: 'store:gone', path: gone, store: null, deployScripts: [] };
+    writeFileSync(registry, JSON.stringify(entries));
+    const result = box.cli(['doctor']);
+    writeFileSync(registry, saved);
+    assert.match(result.out, /missing +\S+not-a-repo runs the pipeline's pre-push hook\. git cannot find its hooks folder there/);
   });
 
   // R4 sweep: a ruleset doctor cannot read may be one the token bypasses, and a missing permission is unknown.
