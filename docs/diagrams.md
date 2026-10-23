@@ -16,14 +16,18 @@ flowchart TD
     decisions --> lanes["Lanes: one builder each, own workspace, own files"]
     lanes --> checks["Checks in order: typecheck, unit and build side by side, then integration, then e2e one file at a time"]
     checks --> mutation["Each new test fails with its fix removed"]
-    mutation --> integrate["Integration: stack the lanes, resolve docs conflicts"]
+    mutation --> integrate["Integration: stack the lanes, resolve docs conflicts, record the stacked tip"]
     integrate --> scan["Pre-push scan of the range"]
     scan --> push["Push to a ci/* branch, never forced"]
     push --> ci["CI: wait until every job has finished"]
     ci --> creview["Code review rounds to consensus"]
     creview --> rebase["Rebase onto main: coverage kept where patch-ids match"]
     rebase -->|"a diff changed"| creview
-    rebase --> deploy["Deploy: backup, health, load check, HTTP checks"]
+    rebase --> again["Scan and CI again on the new commit ids"]
+    again --> gate{"Deploy check: review, CI on the exact commit, scan, docs"}
+    gate -->|"a gap"| close["Refused: close the gap the check names"]
+    close --> gate
+    gate -->|"holds"| deploy["Deploy: backup, health, load check, HTTP checks"]
     deploy --> notify["Notification: what shipped"]
     notify --> cleanup["Cleanup: branches, workspaces, databases, review folder"]
     cleanup --> play["Live play of the deployed build"]
@@ -48,7 +52,7 @@ stateDiagram-v2
     inprogress --> passed: every check holds, sign-offs in
     inprogress --> failed: a check refused
     failed --> inprogress: fixed and rerun
-    passed --> stale: rebase gives new commit ids
+    passed --> stale: the tip moves (new commits, integration, rebase)
     stale --> inprogress: rerun on the new commits
     passed --> [*]
     inprogress: in progress (noted, in-review, running, ready, blocked)
@@ -132,7 +136,7 @@ flowchart TD
 flowchart LR
     subgraph coordinator["Coordinator, main workspace"]
         plan["Split by files"]
-        stack["Stack the lanes, resolve feature list and guide conflicts"]
+        stack["Stack the lanes, resolve feature list and guide conflicts, pipeline integrate"]
     end
     subgraph laneA["Lane A: repo-taskA workspace"]
         a1["Owns server/rules/**"]
@@ -165,7 +169,7 @@ flowchart TD
     small --> checks["Checks: touched e2e files only"]
     checks --> scan["Scan"]
     scan --> live{"Is the hole live on the server?"}
-    live -->|"yes"| local["Keep the branch off the public remote, check on this machine"]
+    live -->|"yes"| local["Keep the branch off the public remote, run every check on this machine on the exact tip, in place of CI"]
     live -->|"no"| push["Push to ci/*, CI"]
     local --> light["Light review: two reviewers, medium effort"]
     push --> light
@@ -195,22 +199,26 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    cmd["jj git push --bookmark B, or git push origin B"] --> config{"Repository has pipeline.config.json?"}
+    cmd["jj git push or git push"] --> config{"pipeline.config.json committed on the remote trunk?"}
     config -->|"no"| allow["Allowed"]
-    config -->|"yes"| form{"Named bookmarks, no force flags, to origin?"}
-    form -->|"no"| refuse["Refused, with the reason"]
-    form -->|"yes"| trunk{"B is trunk?"}
-    trunk -->|"yes"| deploygate["Deploy gate on the commit"]
+    config -->|"yes"| form{"Every ref it moves resolved exactly, no force or no-verify, to origin, nothing earlier on the line that changes them?"}
+    form -->|"no"| refuse["Refused, with the reason and the plain form"]
+    form -->|"yes"| each["For each ref it moves"]
+    each --> trunk{"B is trunk?"}
+    trunk -->|"yes"| runby{"deploy.runBy is user?"}
+    runby -->|"yes"| refuse
+    runby -->|"no"| deploygate{"Fast-forward, and the deploy check passes on the commit?"}
+    deploygate -->|"no"| refuse
+    deploygate -->|"yes"| allow
     trunk -->|"no"| branch{"B matches push.branches?"}
     branch -->|"no"| refuse
     branch -->|"yes"| ancestor{"Remote B is an ancestor of the new tip?"}
     ancestor -->|"no"| newname["Refused: a force push. Use ci/x-2 and forget the old bookmark"]
     ancestor -->|"yes"| scanned{"Every new commit in a passed scan?"}
     scanned -->|"no"| refuse
-    scanned -->|"yes"| hole{"Part of a run fixing a live hole, public remote?"}
+    scanned -->|"yes"| hole{"A live-hole fix by id, patch-id or ancestry, public remote, not deployed?"}
     hole -->|"yes"| refuse
     hole -->|"no"| allow
-    deploygate --> allow
 ```
 
 ## 8. A deploy, step by step
@@ -223,14 +231,19 @@ sequenceDiagram
     participant S as Server
     participant U as User
     C->>P: deploy check --run R
-    P->>P: review coverage by patch-id, CI on the exact commit, scan, docs rules
+    P->>P: review coverage by patch-id, CI on the exact commit (local checks for a live-hole fix), scan, docs rules
     P->>G: pipeline/deploy pending, ready
     P-->>C: allowed, with the deploy command
     alt the user runs production deploys
         C->>U: the command to run
         U->>S: deploy
     else the agent may deploy
-        C->>S: deploy (the gate checks the commit first)
+        C->>P: the gate runs the deploy check on the commit
+        alt a gap
+            P-->>C: refused, with the reason
+        else it holds
+            C->>S: deploy
+        end
     end
     S-->>C: backup file, health, load check, HTTP codes
     C->>P: deploy record --shipped "..." --backup --health --load --http

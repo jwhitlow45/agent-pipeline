@@ -33,6 +33,7 @@ Build
   commits   --run R --lane L [--tip REV] [--outside "path: reason"]...
   check     --run R --lane L [--e2e FILES|all] [--only NAMES] [--dry-run]
   check     --run R --lane L --record NAME --exit CODE --log F
+  check     --run R --tip REV --workspace DIR         Every check, every e2e file included, on that exact commit
   mutation  --run R --lane L --commit REV --test FILE [--cmd CMD] | --manual HOW --exit CODE [--log F]
   report    --run R --lane L --file F
   integrate --run R --tip REV                         The stacked tip of several lanes: checks it holds every lane commit
@@ -48,7 +49,7 @@ Ship
   deploy    record --run R --name N --shipped TEXT --backup B --health H --load N/M --http "200 200" [--restarts 0] [--failed [WHY]] [--by agent|user] [--ungated WHY] [--no-notify]
   notify    --run R --event deploy|waiting|done|failed|note --message TEXT
   cleanup   --run R
-  abandon   --run R --reason "the user's words" --by WHO   Stop a run for good: releases its lanes, and it never deploys
+  abandon   --run R --reason TEXT --by WHO            Stop a run for good: frees its lanes, never deploys
 
 After
   live-play start|bug|import|resolve|status|done --run R [--prefix LPn] [--deployed REV] [--workspace DIR] [--db NAMES] [--brief F]

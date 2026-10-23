@@ -11,7 +11,9 @@ You coordinate work through stages. Each stage records what it checked in a ledg
 
 ## When the gate blocks
 
-Read the reason, do the missing stage, then run the command again. Never reword a command to get past the gate. When the gate is wrong, tell the user. When it blocks for missing review or a production deploy, the user decides: ask, or give the user the command.
+Read the reason, do the missing stage, then run the command again. Never reword a command to get past the gate. A form the gate cannot read (a variable, xargs, a script fed through a pipe) is refused: run the plain command with every argument written out, on its own line. When the gate is wrong, tell the user. When it blocks for missing review or a production deploy, the user decides: ask, or give the user the command.
+
+The gate acts once the project's `pipeline.config.json` is committed on the remote trunk, and reads its push, CI, review and deploy keys only from there.
 
 ## The order
 
@@ -23,14 +25,15 @@ Read the reason, do the missing stage, then run the command again. Never reword 
    - `pipeline check --run R --lane L --e2e <touched files>` runs typecheck, unit and build side by side, then integration, then e2e one file at a time, and records exact results
    - `pipeline mutation --run R --lane L --commit REV --test FILE` for each commit that adds a test with its fix
    - `pipeline report --run R --lane L --file F` for the full report. The builder's message to you is about ten lines.
+   - with several lanes, stack them and record the stacked tip: `pipeline integrate --run R --tip REV`
    - `pipeline signoff --run R --stage build --item scope ...` once you checked one commit per item and whole bug classes fixed, then `pipeline build --run R --review-topic T`.
-5. **Scan.** `pipeline scan --run R`. Errors block. Look at each finding to review and acknowledge it with `--ack "<why each is fine>"` only when it is safe. Never push a fix for a hole live on the server before it deploys.
+5. **Scan.** `pipeline scan --run R`. Errors block. Look at each finding to review and acknowledge it with `--ack "<why each is fine>"` only when it is safe. Never push a fix for a hole live on the server before it deploys. Run every check on the exact tip on this machine instead: `pipeline check --run R --tip REV --workspace DIR`.
 6. **Push.** Only to `ci/*`, never forced: `jj bookmark set ci/R -r <tip> && jj git push --bookmark ci/R`. If the gate says the move is sideways, push to the name it offers and `jj bookmark forget` the old one.
-7. **CI.** `pipeline ci --run R --wait`. It counts only when every job has finished.
+7. **CI.** `pipeline ci --run R --wait`. It counts only a run of `ci.workflow` on the exact commit, once every job has finished.
 8. **Code review.** Use the review routine (agent-review) when installed: at least one Claude and one Codex reviewer, round 1 exhaustive, confer, dispositions verified against the code, fixes as new commits, P3s to the backlog, rounds to consensus. Without agent-review, `pipeline review start|round|done|skip` keeps the ledger. `pipeline review status --run R` shows coverage.
 9. **Rebase.** After rebasing onto main: `pipeline rebase --run R --tip REV`. Coverage carries over by patch-id. A changed diff reopens the review. Scan and CI run again.
 10. **Deploy.** `pipeline deploy check --run R`. When the user runs deploys, give the user the command. Never run a production deploy workflow. After the deploy: `pipeline deploy record --run R --name N --shipped "<what shipped>" --backup B --health H --load N/M --http "200 200"`, which also sends the notification.
-11. **Cleanup.** `pipeline cleanup --run R` lists the merged branches to delete, workspaces to forget and remove, `jj workspace update-stale`, databases to drop and review folders to archive. Run the commands, then rerun it.
+11. **Cleanup.** `pipeline cleanup --run R` lists the merged branches to delete, workspaces to forget and remove, `jj workspace update-stale`, databases to drop and review folders to archive. Run the commands, then rerun it. Work the user drops: `pipeline abandon --run R --reason "<the user's words>" --by <who>`.
 12. **Live play.** After each deploy, beside the next design or build: `pipeline live-play start --run R --prefix LPn`. Agents play the deployed build on their own server, ports and database, fix bugs as small `fix` commits with IDs `LPn-AREA-k` and severities, and report "needs owner" for anything that changes documented behavior. `pipeline live-play import --run R --report F`, decide each needs-owner item, ship the fixes as a hotfix run, sign off `live-play/bug-fix-only`, then `pipeline live-play done --run R`.
 13. **Follow-ups.** `pipeline followup add` for each P3. Plan lanes with no shared file: `pipeline followup plan --run R --lanes N`.
 14. **Docs.** The feature list, guide and shortcut sheet change with the behavior, in the lane's own docs commit. `pipeline docs --run R --due` says when a guide pass with new screenshots is due.

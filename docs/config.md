@@ -1,6 +1,8 @@
 # Config
 
-A project declares its pipeline in `pipeline.config.json` at the repository root, committed. `pipeline.local.json` beside it is gitignored and holds what must never be committed. The local file wins over the committed one, and both merge over the defaults below. `pipeline config` prints the merged result, and `pipeline config --check` its warnings.
+A project declares its pipeline in `pipeline.config.json` at the repository root, committed. `pipeline.local.json` beside it is gitignored and holds what must never be committed: private values and paths. Both merge over the defaults below, and the local file wins for every key except the gate's own. `pipeline config` prints the merged result, and `pipeline config --check` its warnings.
+
+The gate's own keys come only from `pipeline.config.json` as committed on the remote trunk (jj's `trunk()`): `trunk`, `remote`, `push.*`, `ci.workflow`, `review.provider`, `review.trustGithubStatus`, `review.trustedStatusWriters`, `deploy.runBy`, `deploy.match`, `deploy.tipArg`, `deploy.prodPattern` and `deploy.deployWorkflows`. An agent can edit its working copy, but not the remote trunk without passing the gate, so a working-copy edit never loosens the gate. `pipeline.local.json` may not set them at all. A change to one takes effect once it reaches trunk, and `config --check` names each key whose working-copy value differs. A repository whose trunk has no committed config is not gated.
 
 An unknown key is refused, so a typo never turns a check off. A value of the wrong type is refused too. A value in angle brackets, such as `<private-domain>`, is a placeholder: it is never scanned for, and `config --check` reports it.
 
@@ -87,29 +89,30 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 | `scan.workflowPaths` | `.github/workflows/**` | Where a secret, write permission or deploy needs a look. |
 | `push.branches` | `["ci/*"]` | The only branches agents push to. |
 | `push.requireScan` | `true` | Every commit new to the remote must be in a passed scan. |
-| `push.public` | `true` | The remote is public: a run marked `--live-hole` stays off it until it deploys. |
+| `push.public` | `true` | The remote is public: a run marked `--live-hole` stays off it until it deploys, and deploys on local checks in place of CI. |
 
 ## `ci`, `review`
 
 | Key | Default | Meaning |
 |---|---|---|
-| `ci.workflow` | `null` | The workflow name (or file name) whose runs count. `null` takes the newest run of any workflow. |
+| `ci.workflow` | `null` | The workflow name or file name whose runs count as CI, or a list of them, each needing a green run. Required: with none, `pipeline ci` counts no run. |
 | `ci.pollSec` | `30` | |
 | `ci.timeoutMin` | `120` | |
 | `ci.okConclusions` | success, skipped, neutral | |
 | `review.provider` | `"auto"` | `"agent-review"`, `"builtin"` or `"auto"` (agent-review when its ledger or command exists). |
 | `review.agentReviewLedger` | `~/.local/state/agent-review` | Read, never written. `$AGENT_REVIEW_LEDGER` overrides it. |
 | `review.minReviewers` | `2` | Replies the builtin `done` needs. |
-| `review.trustGithubStatus` | `false` | Count a success `agent-review` or `pipeline/review` status on the tip as consensus. |
+| `review.trustGithubStatus` | `false` | Count a success `agent-review` or `pipeline/review` status on the tip as consensus, when it is the newest status of its context and a trusted writer set it. |
+| `review.trustedStatusWriters` | `[]` | GitHub logins whose review statuses count. Empty means the repository's owner. |
 
 ## `deploy`, `notify`
 
 | Key | Default | Meaning |
 |---|---|---|
 | `deploy.command` | `null` | The deploy command, with `{name}`, `{tip}` and `{prev}`. |
-| `deploy.match` | `null` | A regex that finds the deploy command in a shell command, for the gate. |
+| `deploy.match` | `null` | A regex that finds the deploy command in a shell command, for the gate. It must match from the command's first word. The gate checks every registered repository's pattern, wherever the command runs. |
 | `deploy.tipArg` | `null` | Which positional argument of the deploy command is the revision it deploys, counted from 1. |
-| `deploy.runBy` | `"user"` | `"user"`: agents never run the deploy, and are given the command for the user. `"agent"`: agents may, after the gate. |
+| `deploy.runBy` | `"user"` | `"user"`: agents never run the deploy or move trunk, and are given the command for the user. `"agent"`: agents may, after the gate. |
 | `deploy.requiredChecks` | backup, health, load, http | What `deploy record` must be given. `restarts` may be added. |
 | `deploy.healthyValues` | healthy, ok | |
 | `deploy.deployWorkflows` | `"deploy"` | A regex for workflow names that deploy. |

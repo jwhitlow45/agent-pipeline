@@ -7,6 +7,8 @@ Each run (a feature, a batch, a hotfix, a follow-up batch, a guide pass) is one 
 
 Only commits GitHub has can carry a status, so a status appears once the commit is pushed. `pipeline mirror --run R` sets them again, and the PostToolUse hook sets them after every push.
 
+A status describes only the evidence recorded for that exact commit. When the run's tip moves (new commits, an integration, a rebase), a stage recorded on the old tip shows as `pending` on the new one until it runs again, and a status on a tip never vouches for the commits under it.
+
 Each section below gives the command, what it checks mechanically, what it refuses, and what stays a judgment call with its sign-off. [process.md](process.md) explains why each rule exists.
 
 ## intake
@@ -33,7 +35,7 @@ Checks on the note:
 - each section in `design.requiredSections` (Tests and Build plan by default)
 - no em dash.
 
-The stage is `noted` when the note passes, and `passed` when the design review `T` has reached consensus in agent-review's ledger or the builtin one (or the user's skip is recorded with `--review-skip "<the user's words>"`). A note edited after consensus is refused until another round agrees and `--re-review` is passed. A lane checks that its workspace holds the same note the reviewers agreed on.
+The stage is `noted` when the note passes, and `passed` when the design review `T` has reached consensus in agent-review's ledger or the builtin one (or the user's skip is recorded with `--review-skip "<the user's words>"`). The pass binds the note's hash to the consensus it rests on (its round count and time). A note edited after that is refused. `--re-review` passes the edited note only once the review has reached a consensus newer than the bound one. A lane checks that its workspace holds the same note the reviewers agreed on.
 
 A spec must quote the user's words and stay under `fastLane.specMaxLines` lines. A spec is also checked for decision IDs.
 
@@ -54,6 +56,8 @@ The gate refuses `agent-review start --topic T` for a registered design topic un
 
 It refuses an entry without all three parts, an em dash, an ID that does not match `decisions.idPattern`, and an ID already logged.
 
+An ID counts as logged only where an entry starts with it: in a heading, as the first word of a list item, or in a list item's label before its first colon, such as `- 2026-10-22 (coordinator, UI-3): ...`. An ID the text of an entry only mentions ("Rejected: the UI-2 rule") is not logged.
+
 `pipeline brief` collects the IDs a brief names as decided (every ID on a line that says "decided", plus a `Decisions:` line) and refuses the brief when one is not in the log. `pipeline decisions --run R` checks every ID the run's briefs named.
 
 **Judgment:** in guess mode, whether every product choice the user did not settle was logged. Sign-off `decisions/complete`. With `decisions.guessMode` on, the deploy gate needs this stage passed.
@@ -66,8 +70,11 @@ It refuses an entry without all three parts, an em dash, an ID that does not mat
 
 - Needs intake and design passed.
 - The workspace must be the root of a jj workspace of the same repository, and no other open lane may use it.
-- `--owns` must not match a tracked file another open lane owns, in this run or any other open run of the repository.
+- `--owns` must not match a tracked file another open lane owns, in this run or any other open run of the repository. The check and the record are one step under a lock, so two lanes added at once cannot both claim a file.
 - The brief must quote the user's words, point at the shared preamble (`brief.preamble`), and name only logged decisions.
+- `--base` defaults to the remote trunk.
+
+A lane stops owning its files when its run's cleanup passes or the run is abandoned.
 
 ### Commits
 
@@ -86,19 +93,25 @@ It refuses an entry without all three parts, an em dash, an ID that does not mat
 
 1. `checks.parallel`, side by side
 2. `checks.integration`, one after another
-3. `checks.e2e.command` for each chosen file and each `checks.e2e.always` file, one at a time, with `checks.e2e.beforeEach` before each.
+3. `checks.e2e.command` for each chosen file and each `checks.e2e.always` file, one at a time, with `checks.e2e.beforeEach` before each. A file whose `beforeEach` fails or runs past `checks.e2e.beforeEachTimeoutSec` fails without running.
 
 It refuses a workspace with uncommitted changes, or one not on the lane's recorded tip. With `checks.stopOnFailure`, a failed phase stops the later ones, but the phase it is in finishes, so every failure there shows. On macOS it keeps the machine awake while it runs.
 
 `pipeline check --record NAME --exit CODE --log F` records a check run elsewhere, and refuses it until the earlier phases passed on the same tip.
 
+`pipeline check --run R --tip REV --workspace DIR` runs every check, every e2e file included, in a workspace whose working copy sits on that exact commit, and records the results for the commit. A run fixing a live hole deploys on these in place of CI.
+
 ### Mutation checks
 
 `pipeline mutation --run R --lane L --commit REV --test FILE` exports the commit's tree to a temporary folder, links `mutation.link` (such as `node_modules`), runs the test and expects a pass, then removes the commit's code changes (everything but tests and docs) and expects a failure. A test that still passes is refused: it does not test the fix. `--manual "<how>" --exit CODE` records a check done by hand, where the fix and its test are in different commits.
 
+### Integration
+
+`pipeline integrate --run R --tip REV` records the stacked tip of several lanes as the run's tip. It refuses a tip that lacks any lane commit, matched by patch-id, and lists the commits no lane made (conflict resolutions), which the scan, CI and review cover.
+
 ### Report and stage
 
-`pipeline report --run R --lane L --file F` records the report file (and checks `report.sections` if set). `pipeline build --run R [--review-topic T]` passes the stage when every lane has commits that follow the rules, checks green in order on its tip with the always-run e2e files included, a mutation check for every commit that changes code and a test together (by commit ID or patch-id), a report, and the `build/scope` sign-off.
+`pipeline report --run R --lane L --file F` records the report file (and checks `report.sections` if set). `pipeline build --run R [--review-topic T]` passes the stage when every lane has commits that follow the rules, checks green in order on its tip with the always-run e2e files included, a mutation check for every commit that changes code and a test together (by commit ID or patch-id), a report, and the `build/scope` sign-off. With more than one lane, the run's tip must also be an integrated tip that holds every lane commit.
 
 The gate refuses `agent-review start --topic T` for a registered code topic until the build passes.
 
@@ -106,7 +119,7 @@ The gate refuses `agent-review start --topic T` for a registered code topic unti
 
 ## scan
 
-`pipeline scan --run R [--base REV] [--tip REV] [--ack "<why each finding is fine>"]` scans the commits from the fork point with trunk to the tip, and their added lines.
+`pipeline scan --run R [--base REV] [--tip REV] [--ack "<why each finding is fine>"]` scans each commit from the fork point with the remote trunk to the tip on its own: the lines its diff adds, its message and the paths it touches. A string one commit adds and the next removes still refuses, since the first commit would publish it. A finding names the commit and where, and never prints a private string or a secret.
 
 Errors, which always refuse:
 
@@ -131,25 +144,29 @@ Files matching `scan.exclude` (images, lockfiles) are skipped. Each scan records
 
 ## push
 
-The gate checks every `jj git push` and `git push`. `pipeline push --run R --bookmark B` runs the same check and prints the commands.
+The gate checks every `jj git push` and `git push`, and resolves every ref the push would move. `pipeline push --run R --bookmark B` runs the same check and prints the commands.
 
-- Only named bookmarks: `--all`, `--tracked`, `-c`, `-r`, a pattern, or no bookmark at all are refused.
+- jj: each bookmark given by exact name (`-b`, `--named NAME=REV`), each bookmark on the commits of `-r`, the name `-c` would create, and each bookmark `--all`, `--tracked` or `--deleted` would move. A pattern, a tag, an option the gate does not know, a value built at run time, `--at-op`, or a push that names no bookmark is refused. A bookmark already where the remote has it is not counted. A commit that is a working copy, or sits under one, is refused, since jj would snapshot edits on disk into it.
+- git: the remote and each refspec, written out. Force in any spelling (`-f`, `--force-with-lease`, `+ref`, `--mirror`), `--no-verify`, `--all`, `--branches`, `--tags`, `--prune`, `--follow-tags`, `--receive-pack`, `--exec`, a submodule push, a pattern, a ref outside `refs/heads/`, and `-c` settings or aliases that change hooks, remotes or aliases are refused.
 - Only `remote`, never another remote.
-- Only `push.branches` (`ci/*` by default). Trunk moves only as a deploy step, with the deploy gate.
-- Never a force push: `git push -f`, `--force-with-lease`, `+ref` and `--mirror` are refused, and so is a jj push that would move a remote branch to a commit its old commit is not an ancestor of. The refusal names the next free branch name (`pipeline push --next-name`).
+- Only `push.branches` (`ci/*` by default).
+- Never a force push: a push that would move a remote branch to a commit its old commit is not an ancestor of is refused, and the refusal names the next free branch name (`pipeline push --next-name`).
 - Every commit new to the remote must be in a passed scan.
-- With `push.public`, no commit of a run marked `--live-hole` before its deploy passes.
-- A deletion is allowed for `push.branches` only.
+- With `push.public`, no commit of a run marked `--live-hole` before its deploy passes, matched by commit id, by patch-id and by ancestry of every tip the run has had. An abandoned run still counts.
+- A deletion is allowed for `push.branches` only, never for trunk.
+- Trunk moves only as a deploy step. Under `deploy.runBy: "user"` an agent never moves it. Under `"agent"` the push must fast-forward trunk and pass the deploy check on the commit.
 
-A bookmark set earlier in the same command (`jj bookmark set ci/x -r @- && jj git push --bookmark ci/x`) is checked at the commit it will point to.
+A bookmark set earlier in the same command (`jj bookmark set ci/x -r @- && jj git push --bookmark ci/x`) is checked at the commit it will point to, and at the commit it points to now, in case the set fails. Any other command earlier on the line that can change the repository refuses a later push on that line: run it on its own first. A form the gate cannot read (xargs, a shell reading a pipe, a variable command name) is refused when it holds a push.
 
-After a push, the PostToolUse hook records the run's tip as pushed, with the branches that carry it, and mirrors the run's statuses.
+After a push, the PostToolUse hook records the run's tip as pushed, with the branches that carry it, and mirrors the run's statuses. It skips runs whose cleanup passed and abandoned runs.
+
+The git pre-push hook runs the same check for a plain `git push`, with the remote's real commit from git.
 
 ## ci
 
-`pipeline ci --run R [--commit REV] [--wait] [--run-id ID]` reads the newest run of `ci.workflow` for the exact commit. It counts only when the run and every job say completed, and passes only when the run's conclusion and every job's are in `ci.okConclusions`. It records the run ID, URL, conclusion and jobs per commit. `pipeline/ci` links to the run. Without `--wait`, an unsettled run exits 3.
+`pipeline ci --run R [--commit REV] [--wait] [--run-id ID]` reads, for each workflow in `ci.workflow`, its newest run on the exact commit in this repository. A run of another workflow, on another commit or in another repository never counts, `--run-id` included. A run counts only when it and every job say completed, and passes only when the run's conclusion and every job's are in `ci.okConclusions`. CI passes when every designated workflow passes. It records the runs, URLs, conclusions and jobs per commit. `pipeline/ci` links to the run. Without `--wait`, an unsettled run exits 3.
 
-It needs the scan passed and the commit on the remote.
+It needs `ci.workflow` set, the scan passed and the commit on the remote. A run fixing a live hole is refused: it deploys on local checks instead (see deploy).
 
 ## review
 
@@ -157,27 +174,28 @@ It needs the scan passed and the commit on the remote.
 
 - **With agent-review** (`review.provider` `auto` finds it), the pipeline only reads its ledger. agent-review sets its own `agent-review` status, so the pipeline sets no `pipeline/review` status.
 - **Without it**, `pipeline review start|round|done|skip` keeps a builtin ledger in the same format, writes the review folder with round 1's request (the user's words filled in), and sets `pipeline/review`. `done` needs at least `review.minReviewers` replies saved in the round's `replies/` folder. `skip` needs the user's words.
-- **Across machines**, `review.trustGithubStatus` also counts a success status from `agent-review` or `pipeline/review` on the tip.
+- **Across machines**, `review.trustGithubStatus` also counts a success status from `agent-review` or `pipeline/review` on the tip. Only the newest status of each context counts, and only when a trusted writer set it (`review.trustedStatusWriters`, by default the repository's owner). The gate refuses an agent's `gh api` write of a `pipeline/*` or `agent-review` status.
 
-With the builtin provider, the gate also refuses `gh pr ready` and `gh pr merge` until every commit the pull request carries has consensus.
+With the builtin provider, the gate also refuses a pull request created ready (`gh pr create` without `--draft`, or a `gh api` write that is not a draft), `gh pr ready` and `gh pr merge` until every commit the pull request carries has consensus. Under either provider, a merge into trunk (`gh pr merge`) is a deploy step, and a `gh api` merge or ref write is refused.
 
 **Judgment:** every finding's disposition and the consensus itself.
 
 ## rebase
 
-`pipeline rebase --run R --tip REV`, after rebasing onto main: lists the commits that keep their patch-id, those whose diff changed, and those that now lack review consensus. It sets scan, push and CI to `stale`, since the commit IDs changed, and build to `stale` when a diff changed. It names the review round to run when coverage was lost.
+`pipeline rebase --run R --tip REV`, after rebasing onto main: lists the commits that keep their patch-id, those whose diff changed, and those that now lack review consensus. It moves the run's tip, so every stage recorded on the old tip (scan, push, CI, review, docs) goes `stale`. Lane commits are matched to the new ids by patch-id. The build carries over when every diff kept its patch-id and every lane commit is in the new range, and goes `stale` otherwise. It names the review round to run when coverage was lost.
 
 ## deploy
 
 `pipeline deploy check --run R [--tip REV]` passes when:
 
+- the run is not abandoned
 - intake, design and build passed (decisions too in guess mode, docs too for a docs run)
-- every commit from trunk to the tip has code review consensus or the user's recorded skip
-- a settled, green CI run exists for the exact tip
+- every commit from the remote trunk to the tip has code review consensus or the user's recorded skip
+- a settled, green run of every `ci.workflow` exists for the exact tip. A run fixing a live hole needs instead every check, every e2e file included, recorded on the exact tip with `pipeline check --tip`.
 - every commit is in a passed scan
 - the docs rules hold for the range (see docs).
 
-It prints `deploy.command` filled in. With `deploy.runBy: "user"` it says to give the user the command, and the gate refuses the deploy command (`deploy.match`) and any deploy workflow for agents. With `"agent"`, the gate runs the deploy check on the commit the command deploys (`deploy.tipArg`). A workflow whose name or `environment` input says prod is always refused.
+It prints `deploy.command` filled in. The gate finds the deploy command (`deploy.match`) in any folder, since it matches the pattern of every repository whose config is committed on this machine. With `deploy.runBy: "user"` it says to give the user the command, and the gate refuses the deploy command, any deploy workflow, and every move of trunk (a push, `gh pr merge` into trunk) for agents. With `"agent"`, the gate runs the deploy check on the commit the command deploys (`deploy.tipArg`) or a deploy workflow's `--ref` resolves to on GitHub, and refuses a commit that is a working copy. A workflow whose name or `environment` input says prod is always refused, and so is a rerun of a deploy workflow, since its inputs are not visible to the gate.
 
 `pipeline deploy record --run R --name N --shipped "<what shipped>" --backup B --health H --load N/M --http "200 200"` checks each of `deploy.requiredChecks`: a backup name, health in `deploy.healthyValues`, a load check with every record loaded, every HTTP answer 2xx or 3xx, and zero restarts when `restarts` is required. It refuses to record a deploy the gate would have refused, unless `--ungated "<why>"`. It sends the notification ("Deployed N: what shipped", or "Deploy of N failed: why") through `notify.command`. `--failed [why]` records a failed deploy, notification included.
 
@@ -196,6 +214,10 @@ It prints `deploy.command` filled in. With `deploy.runBy: "user"` it says to giv
 
 It passes when nothing is left, and releases the run's lanes, so their files can be owned by new lanes.
 
+## abandon
+
+`pipeline abandon --run R --reason "<the user's words>" --by WHO` stops a run for good. It records who decided and why, releases the run's lanes, and prints the cleanup commands for its branches, workspaces and databases. The run never deploys, and `pipeline status` lists it only with `--all`. A run fixing a live hole keeps its commits off the public remote, since stopping the work does not close the hole. Work picked up again starts a new run.
+
 ## live-play
 
 `pipeline live-play start --run R --prefix LP14 [--workspace DIR] [--db NAMES] [--brief F]` needs a passed deploy and starts on the deployed commit. Bugs are added one at a time (`live-play bug --id --severity --area --summary --status fixed|needs-owner|known|not-a-bug [--commit] [--recommend]`) or from the report's table (`live-play import --report F`, with rows `| ID | Sev | Area | Bug | Status |` and a status cell of `fixed <commit>` or `needs owner: <recommendation>`).
@@ -211,7 +233,7 @@ It passes when nothing is left, and releases the run's lanes, so their files can
 
 ## followups
 
-`pipeline followup add --run R --id ID --severity P3 --source S --text T --files F,...` adds to the repository's backlog. A P0 to P2 item needs `--decision ID` naming a logged decision that defers it, since those findings block review. `followup plan --lanes N [--ids ...] [--apply]` groups items that share a file and deals the groups into lanes, so no file is in two lanes, and prints the `pipeline lane` commands. `followup close --id ID --commit REV` closes an item. `followup list [--open]` prints the backlog as a table.
+`pipeline followup add --run R --id ID --severity P3 --source S --text T --files F,...` adds to the repository's backlog. Each change to the backlog is one step under a lock, so agents adding items at once keep every item. A P0 to P2 item needs `--decision ID` naming a logged decision that defers it, since those findings block review. `followup plan --lanes N [--ids ...] [--apply]` groups items that share a file and deals the groups into lanes, so no file is in two lanes, and prints the `pipeline lane` commands. `followup close --id ID --commit REV` closes an item. `followup list [--open]` prints the backlog as a table.
 
 ## docs
 

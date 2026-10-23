@@ -73,7 +73,7 @@ The builder ends with its report file and a short message.
 
 ### 5. Integration
 
-When several lanes build one feature, the coordinator stacks them, resolves the mechanical conflicts itself (feature list and guide conflicts are the common ones), and checks the stacked tip. Batches stay small: two or three features, about 25 commits. A batch goes to review as soon as its lanes land, and the next batch builds on top while it is reviewed.
+When several lanes build one feature, the coordinator stacks them, resolves the mechanical conflicts itself (feature list and guide conflicts are the common ones), records the stacked tip (`pipeline integrate`, which checks that it holds every lane commit), and checks it. Batches stay small: two or three features, about 25 commits. A batch goes to review as soon as its lanes land, and the next batch builds on top while it is reviewed.
 
 ### 6. Pre-push scan
 
@@ -82,7 +82,7 @@ Pushing a branch to a public repository publishes it at once, and a deleted bran
 - errors that always block: an unsigned commit, an AI trailer, an em dash in a message, a private string (the live domain, the deploy host), a home folder path, a secret, an added `.env` file
 - findings someone must look at and acknowledge with a reason: URLs to hosts not on the allow list, HTML sinks (`innerHTML` and the like), credentials in a URL, workflow changes that add secrets, write permissions or a deploy.
 
-A fix for a hole that is live on the server is never pushed to a public branch before it deploys, since the branch would advertise the hole. Its checks run on the machine instead.
+A fix for a hole that is live on the server is never pushed to a public branch before it deploys, since the branch would advertise the hole. That holds for a copy or a rebase of the fix too. Every check, every e2e file included, runs on this machine on the exact commit to deploy (`pipeline check --tip`), and stands in for CI.
 
 ### 7. Push
 
@@ -90,7 +90,7 @@ Agents push only to `ci/*` branches, and only commits a passed scan covered. The
 
 ### 8. CI
 
-CI runs every check on Linux, with the e2e files in shards. A run counts only once every job has finished: GitHub can report a run as completed while a job is still running. The run ID and result are recorded per commit (`pipeline ci --wait`), and a later deploy needs a green run on that exact commit.
+CI runs every check on Linux, with the e2e files in shards. Only a run of the project's designated CI workflow, on the exact commit, in the project's own repository counts, and only once every job has finished: GitHub can report a run as completed while a job is still running. The run ID and result are recorded per commit (`pipeline ci --wait`), and a later deploy needs a green run on that exact commit.
 
 ### 9. Code review
 
@@ -114,11 +114,13 @@ Before deploy, the batch is rebased onto main. A commit whose patch-id (its diff
 
 ### 11. Deploy
 
-A deploy needs code review consensus (or the user's recorded skip) on every commit it ships, a settled green CI run on the exact commit, a passed scan, and the docs rules met. The deploy takes a database backup first, then checks that the app is healthy and has not restarted, runs the app's own load check (every stored record loads), and requests a few pages over HTTP. The results are recorded (`pipeline deploy record`), and a notification names what shipped. A failed or rolled-back deploy gets a notification too.
+A deploy needs code review consensus (or the user's recorded skip) on every commit it ships, a settled green CI run on the exact commit (for a live-hole fix, every local check on it), a passed scan, and the docs rules met. Moving trunk is part of the deploy: where the user runs deploys, agents never move trunk, by push or by merge. The deploy takes a database backup first, then checks that the app is healthy and has not restarted, runs the app's own load check (every stored record loads), and requests a few pages over HTTP. The results are recorded (`pipeline deploy record`), and a notification names what shipped. A failed or rolled-back deploy gets a notification too.
 
 ### 12. Cleanup
 
 After each deploy: merged `ci/*` branches are deleted (a branch whose commits all landed under new IDs after a rebase counts as merged), lane workspaces are forgotten and their folders removed, `jj workspace update-stale` runs in the main workspace, scratch databases are dropped, and the review folder is archived.
+
+Work the user drops is abandoned instead (`pipeline abandon`), with who decided and why. Its lanes give up their files, and it never deploys.
 
 ### 13. Live play
 
