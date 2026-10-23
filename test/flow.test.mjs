@@ -818,26 +818,48 @@ describe('pipeline doctor', () => {
   const box = sandbox({ config: baseConfig });
   after(() => box.cleanup());
   const repoRule = (admin) => ({ match: `api repos/${SLUG}`, stdout: { default_branch: 'main', permissions: { admin, push: true } } });
-  const rulesets = [
-    { match: 'rulesets/1', stdout: { id: 1, name: 'trunk', target: 'branch', enforcement: 'active', current_user_can_bypass: 'never', conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } }, rules: [{ type: 'pull_request' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'pipeline/review', integration_id: 1234 }] } }, { type: 'non_fast_forward' }, { type: 'deletion' }] } },
-    { match: 'rulesets/2', stdout: { id: 2, name: 'all branches', target: 'branch', enforcement: 'active', current_user_can_bypass: 'never', conditions: { ref_name: { include: ['~ALL'], exclude: [] } }, rules: [{ type: 'non_fast_forward' }, { type: 'deletion' }] } },
-    { match: 'rulesets/3', stdout: { id: 3, name: 'tags', target: 'tag', enforcement: 'active', current_user_can_bypass: 'never', conditions: { ref_name: { include: ['~ALL'], exclude: [] } }, rules: [{ type: 'creation' }, { type: 'update' }, { type: 'deletion' }] } },
-    { match: 'rulesets?', stdout: [{ id: 1 }, { id: 2 }, { id: 3 }] },
-  ];
-  const environments = { match: 'environments?', stdout: { environments: [{ name: 'production', protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User' }] }] }] } };
+  const required = [{ context: 'pipeline/scan', integration_id: 1234 }, { context: 'pipeline/ci', integration_id: 1234 }, { context: 'pipeline/review', integration_id: 1234 }];
+  const ruleset = (id, target, include, rules, exclude = []) => ({ match: `rulesets/${id}`, stdout: { id, name: `set ${id}`, target, enforcement: 'active', current_user_can_bypass: 'never', conditions: { ref_name: { include, exclude } }, rules } });
+  const rulesets = (sets) => [...sets, { match: 'rulesets?', stdout: sets.map((set) => ({ id: set.stdout.id })) }];
+  const complete = rulesets([
+    ruleset(1, 'branch', ['~DEFAULT_BRANCH'], [{ type: 'pull_request' }, { type: 'required_status_checks', parameters: { required_status_checks: required } }, { type: 'non_fast_forward' }, { type: 'deletion' }]),
+    ruleset(2, 'branch', ['~ALL'], [{ type: 'non_fast_forward' }, { type: 'deletion' }]),
+    ruleset(3, 'tag', ['~ALL'], [{ type: 'creation' }, { type: 'update' }, { type: 'deletion' }]),
+  ]);
+  const environments = (preventSelfReview) => ({ match: 'environments?', stdout: { environments: [{ name: 'production', protection_rules: [{ type: 'required_reviewers', prevent_self_review: preventSelfReview, reviewers: [{ type: 'User' }] }] }] } });
+  const hook = join(import.meta.dirname, '..', 'git-hooks', 'pre-push');
 
-  test('reports every backstop as present when GitHub enforces it', () => {
-    box.ghScript([...rulesets, environments, repoRule(false)]);
+  test('finds nothing missing when GitHub and this machine enforce it, and still names what the API cannot show', () => {
+    box.sh(`ln -sf ${JSON.stringify(hook)} .git/hooks/pre-push`);
+    box.ghScript([...complete, environments(true), repoRule(false)]);
     const result = box.cli(['doctor']);
     assert.equal(result.code, 0, result.all);
-    assert.match(result.out, /All present/);
+    assert.match(result.out, /Nothing missing that doctor can read\. 3 cannot be read from the API/);
+    assert.match(result.out, /unverified agents use their own credential/);
+    assert.match(result.out, /unverified no release starts a production deploy outside a protected environment/);
+    assert.doesNotMatch(result.out, /All present/);
     assert.ok(!box.ghCalls().some((args) => args.includes('-X') || args.includes('--method')), 'doctor only reads');
   });
 
-  test('names each missing backstop and how to add it', () => {
+  // PA-46: rules on sample names, an unrelated required status and self-review allowed.
+  test('reads coverage across every ref, the pipeline\'s contexts and self-review, not sample names', () => {
+    box.ghScript([...rulesets([
+      ruleset(1, 'branch', ['refs/heads/main'], [{ type: 'pull_request' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'lint', integration_id: 9 }] } }, { type: 'non_fast_forward' }, { type: 'deletion' }]),
+      ruleset(2, 'branch', ['refs/heads/any-branch-name'], [{ type: 'non_fast_forward' }, { type: 'deletion' }]),
+      ruleset(3, 'branch', ['~ALL'], [{ type: 'non_fast_forward' }], ['refs/heads/ci/**']),
+      ruleset(4, 'tag', ['refs/tags/v1'], [{ type: 'creation' }, { type: 'update' }, { type: 'deletion' }]),
+    ]), environments(false), repoRule(false)]);
+    const result = box.cli(['doctor']);
+    assert.equal(result.code, 1);
+    for (const missing of [/missing +main requires the pipeline's checks \(pipeline\/scan, pipeline\/ci, pipeline\/review\)\. Require pipeline\/scan, pipeline\/ci, pipeline\/review/, /missing +no branch can be force pushed/, /missing +no branch can be deleted/, /missing +tags can be created/, /missing +the production environment prevents self-review/]) assert.match(result.out, missing);
+  });
+
+  test('names each missing backstop and how to add it, the pre-push hook included', () => {
+    box.sh('rm -f .git/hooks/pre-push');
     box.ghScript([{ match: 'rulesets?', stdout: [] }, { match: 'environments?', stdout: { environments: [] } }, repoRule(true)]);
     const result = box.cli(['doctor']);
     assert.equal(result.code, 1);
-    for (const missing of [/missing main requires a pull request/, /missing no branch can be force pushed/, /missing tags \(and so releases\)/, /missing the token in use is not a repository admin/, /missing a production environment/]) assert.match(result.out, missing);
+    for (const missing of [/missing +\S+ runs the pipeline's pre-push hook\. \S+pre-push does not exist\. Run install\.sh --project/, /missing +main requires a pull request/, /missing +no branch can be force pushed/, /missing +tags can be created/, /missing +the token in use is not a repository admin/, /missing +a production environment/]) assert.match(result.out, missing);
   });
 });
+
