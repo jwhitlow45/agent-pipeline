@@ -120,7 +120,7 @@ describe('build lanes', () => {
     box.write('../spec.md', WORDS);
     box.cli(['spec', '--run', 'one', '--file', '../spec.md']);
     box.commit('chore: add sources', { 'src/a.mjs': 'a\n', 'src/b.mjs': 'b\n' });
-    box.sh('jj bookmark set main -r @-');
+    box.sh('jj bookmark set main -r @- && jj git push --bookmark main');
     ws = join(box.root, 'demo-one');
     box.sh('jj workspace add --name demo-one ../demo-one -r main');
     assert.match(box.cli(['lane', '--run', 'one', '--lane', 'a', '--workspace', join(box.root, 'nowhere'), '--owns', 'src/**']).err, /not the root of a jj workspace/);
@@ -362,7 +362,7 @@ describe('rebase onto main', () => {
     writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, 'dark.json'), JSON.stringify({ topic: 'dark', repo: ws, identity: `github:${SLUG}`, folder: join(box.root, 'rv'), status: 'consensus', rounds: [{ n: 1, commits }], consensus: { tip, commits, reviewers: 'a, b', rounds: 1 } }));
     assert.equal(ids.length, 2);
     box.commit('chore: unrelated work on main', { 'other.txt': 'x\n' });
-    box.sh('jj bookmark set main -r @-');
+    box.sh('jj bookmark set main -r @- && jj git push --bookmark main');
     box.sh('jj rebase -b @ -d main', ws);
     const moved = box.sh('jj log --no-graph -r @- -T commit_id', ws).trim();
     const carried = box.cli(['rebase', '--run', 'dark', '--tip', moved], { cwd: ws });
