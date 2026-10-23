@@ -62,3 +62,24 @@ test('agents adding to one backlog at once keep every item', async () => {
   const { items } = JSON.parse(readFileSync(join(state, 'followups', file), 'utf8'));
   assert.equal(items.length, 30);
 });
+
+test('rounds added to one builtin review at once each keep their own number', async () => {
+  const state = fresh();
+  const env = { ...process.env, AGENT_PIPELINE_STATE: state };
+  const setup = `
+    import { DEFAULTS } from ${JSON.stringify(join(LIB, 'config.mjs'))};
+    import { builtinRound, builtinStart } from ${JSON.stringify(join(LIB, 'review.mjs'))};
+    const config = { ...structuredClone(DEFAULTS), review: { ...DEFAULTS.review, agentReviewLedger: ${JSON.stringify(join(state, 'none'))} } };
+    const folder = ${JSON.stringify(join(state, 'design-review'))};
+    if (process.argv[1] === 'start') builtinStart({ topic: 'darkdesign', repo: null, folder, words: 'w', config });
+    else for (let i = 0; i < 3; i += 1) builtinRound({ topic: 'darkdesign', config });
+  `;
+  const run = (arg) => new Promise((done, failed) => {
+    const child = spawn(process.execPath, ['--input-type=module', '-e', setup, arg], { env, stdio: 'inherit' });
+    child.on('exit', (code) => (code === 0 ? done() : failed(new Error(`${arg} exited ${code}`))));
+  });
+  await run('start');
+  await Promise.all(Array.from({ length: 6 }, () => run('round')));
+  const { rounds } = JSON.parse(readFileSync(join(state, 'reviews', 'darkdesign.json'), 'utf8'));
+  assert.deepEqual(rounds.map((round) => round.n), Array.from({ length: 19 }, (_, i) => i + 1));
+});
