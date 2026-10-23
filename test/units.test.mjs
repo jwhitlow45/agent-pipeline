@@ -251,3 +251,15 @@ test('a stage recorded on one commit is pending on any other, even when nothing 
   assert.equal(stageFor({}, run, 'intake', next).state, 'passed');
   assert.equal(stageFor({}, run, 'docs', next), null);
 });
+
+// PA-48: a failed rebuild left the old container healthy, the checks passed on it, and main moved.
+test('the example deploy keeps failures through its pipes and checks the container was replaced', () => {
+  const script = readFileSync(join(import.meta.dirname, '..', 'profiles', 'raccoon-vtt', 'deploy.example.sh'), 'utf8');
+  assert.match(script, /^set -e -o pipefail$/m);
+  const rebuild = script.split('\n').find((line) => line.includes('up -d --build'));
+  assert.match(rebuild, /^ssh \S+ "set -o pipefail; /);
+  assert.match(rebuild, /OLD=.*up -d --build.*NEW=.*\[ \\"\\\$OLD\\" != \\"\\\$NEW\\" \].*exit 1/);
+  const publish = script.split('\n').findIndex((line) => line.startsWith('jj git push --bookmark main'));
+  const checks = script.split('\n').findIndex((line) => line.includes('HTTP check failed'));
+  assert.ok(checks !== -1 && publish > checks, 'main moves only after the checks');
+});

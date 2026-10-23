@@ -9,7 +9,9 @@
 # runs it, and a deploy that fails its checks never reaches main. The server has no GitHub key, so
 # the release travels as a git bundle built from the local commit. Each step prints what
 # `pipeline deploy record` needs: the backup's name, health, restarts, the room load check, HTTP codes.
-set -e
+# pipefail, here and on the server, so a failing command before `| tail -1` fails the deploy, and the
+# running container's image must change, so a failed build never passes the checks on the old one.
+set -e -o pipefail
 NAME=$1; REV=$2; PREV=$3; RUN=${4:-$1}
 SCRATCH=<scratch folder>
 APP='<app folder on the server>'
@@ -30,8 +32,8 @@ git bundle create -q "$SCRATCH/$NAME.bundle" "refs/deploy/$NAME" "^$PREV"
 git update-ref -d "refs/deploy/$NAME"
 scp -q "$SCRATCH/$NAME.bundle" <deploy-host>:/tmp/app-$NAME.bundle
 
-# Backup first, then move to the bundle's commit and rebuild.
-ssh <deploy-host> "cd $APP && D=\$(date -u +%Y%m%d-%H%M) && docker compose -f docker-compose.server.yml exec -T postgres pg_dump -U <db user> -d <db name> --format=custom > backups/db-\$D-before-$NAME.dump && ls -l backups/db-\$D-before-$NAME.dump | awk '{print \$5, \$9}' && git fetch -q /tmp/app-$NAME.bundle refs/deploy/$NAME && git merge -q --ff-only FETCH_HEAD && [ \"\$(git rev-parse HEAD)\" = $SHA ] && git rev-parse HEAD && docker compose -f docker-compose.server.yml up -d --build 2>&1 | tail -1"
+# Backup first, then move to the bundle's commit, rebuild, and check the container was replaced.
+ssh <deploy-host> "set -o pipefail; cd $APP && OLD=\$(docker inspect -f '{{.Image}}' <app container>) && D=\$(date -u +%Y%m%d-%H%M) && docker compose -f docker-compose.server.yml exec -T postgres pg_dump -U <db user> -d <db name> --format=custom > backups/db-\$D-before-$NAME.dump && ls -l backups/db-\$D-before-$NAME.dump | awk '{print \$5, \$9}' && git fetch -q /tmp/app-$NAME.bundle refs/deploy/$NAME && git merge -q --ff-only FETCH_HEAD && [ \"\$(git rev-parse HEAD)\" = $SHA ] && git rev-parse HEAD && docker compose -f docker-compose.server.yml up -d --build 2>&1 | tail -1 && NEW=\$(docker inspect -f '{{.Image}}' <app container>) && { [ \"\$OLD\" != \"\$NEW\" ] || { echo 'image unchanged: the build did not replace the running container'; exit 1; }; } && echo image replaced"
 
 # Health, restarts, and the app's own load check: every stored room loads and replays.
 ssh <deploy-host> "cd $APP && for i in \$(seq 1 60); do s=\$(docker inspect -f '{{.State.Health.Status}}' <app container>); [ \"\$s\" = healthy ] && break; sleep 2; done; echo \$s; [ \"\$s\" = healthy ] && docker inspect -f 'restarts={{.RestartCount}}' <app container> && docker compose -f docker-compose.server.yml exec -T <app service> node --input-type=module -" <<'EOF2'
@@ -58,6 +60,9 @@ codes=""
 for u in / /docs /docs/dm-guide; do codes="$codes$(curl -s -o /dev/null -w '%{http_code}' https://<private-domain>$u) "; done
 echo "$codes"
 for c in ${=codes}; do [[ $c == [23]?? ]] || { echo "HTTP check failed: $c. main stays where it was."; exit 1; }; done
+
+# Where the app reports the commit it runs, check that too before publishing, for example:
+# [ "$(curl -s https://<private-domain>/<version path>)" = "$SHA" ] || { echo "the app does not run $SHA"; exit 1; }
 
 # Only now, with the server running and checked, is the commit published.
 jj bookmark set main -r "$SHA" 2>&1 | tail -1
