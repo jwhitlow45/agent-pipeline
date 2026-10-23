@@ -344,10 +344,8 @@ describe('rebase onto main', () => {
     const carried = box.cli(['rebase', '--run', 'dark', '--tip', moved], { cwd: ws });
     assert.match(carried.out, /2 commits keep their patch-id, 0 commits changed, 0 commits lack review consensus/);
     assert.equal(box.run('dark').stages.build.state, 'passed');
-    // New commit ids: the scan and CI run again on them.
     box.cli(['scan', '--run', 'dark'], { cwd: ws });
-    box.cli(['rebase', '--run', 'dark', '--tip', moved], { cwd: ws });
-    assert.equal(box.run('dark').stages.scan.state, 'stale');
+    assert.equal(box.run('dark').stages.scan.state, 'passed');
     box.sh('jj edit @--', ws);
     box.write('src/theme.mjs', 'export const dark = () => 1 === 1;\n', ws);
     box.sh('jj new', ws);
@@ -358,6 +356,8 @@ describe('rebase onto main', () => {
     assert.match(reopened.out, /1 commit changed, 1 commit lack review consensus/);
     assert.match(reopened.out, /agent-review round --topic/);
     assert.equal(box.run('dark').stages.build.state, 'stale');
+    // New commit ids: the scan and CI run again on them.
+    assert.equal(box.run('dark').stages.scan.state, 'stale');
   });
 });
 
@@ -500,5 +500,42 @@ describe('CI without a designated workflow', () => {
   test('pipeline ci refuses to count any run', () => {
     box.cli(['intake', '--run', 'noci', '--kind', 'fast', '--words', WORDS]);
     assert.match(box.cli(['ci', '--run', 'noci']).err, /Set ci.workflow/);
+  });
+});
+
+describe('statuses stay on the commit their evidence covers', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+
+  test('a new tip gets pending statuses for the stages recorded on the old one', () => {
+    const { ws, tip } = builtRun(box);
+    assert.equal(box.cli(['scan', '--run', 'dark'], { cwd: ws }).code, 0);
+    box.commit('fix(ui): a later fix', { 'src/theme.mjs': 'export const dark = () => !false;\n' }, ws);
+    box.cli(['commits', '--run', 'dark', '--lane', 'a'], { cwd: ws });
+    const next = box.run('dark').tip;
+    assert.notEqual(next, tip);
+    assert.equal(box.run('dark').stages.scan.state, 'stale');
+    box.sh('jj bookmark set ci/next -r @- && jj git push -b ci/next', ws);
+    box.cli(['mirror', '--run', 'dark'], { cwd: ws });
+    const onNext = box.ghCalls().filter((args) => args[0] === 'api' && args[3] === `repos/${SLUG}/statuses/${next}`).map((args) => Object.fromEntries(args.filter((arg, i) => args[i - 1] === '-f').map((field) => field.split(/=(.*)/s).slice(0, 2))));
+    assert.deepEqual(onNext.filter((status) => ['pipeline/scan', 'pipeline/build'].includes(status.context)).map((status) => status.state), ['pending', 'pending']);
+    assert.ok(!onNext.some((status) => status.state === 'success' && status.context !== 'pipeline/intake' && status.context !== 'pipeline/design'));
+  });
+});
+
+describe('a review status from GitHub counts only from a trusted writer', () => {
+  const box = sandbox({ config: { ...baseConfig, review: { provider: 'builtin', trustGithubStatus: true } } });
+  after(() => box.cleanup());
+
+  test('the newest review status on the tip, set by the repository owner, attests the range', () => {
+    const { ws, tip } = builtRun(box);
+    const statuses = (list) => box.ghScript([{ match: `commits/${tip}/statuses`, stdout: list }]);
+    const review = () => box.cli(['review', 'status', '--run', 'dark'], { cwd: ws }).out;
+    statuses([{ context: 'pipeline/review', state: 'success', creator: { login: 'someone-else' } }]);
+    assert.match(review(), /: none, 2 none/);
+    statuses([{ context: 'agent-review', state: 'failure', creator: { login: 'example-owner' } }, { context: 'agent-review', state: 'success', creator: { login: 'example-owner' } }]);
+    assert.match(review(), /: none, 2 none/);
+    statuses([{ context: 'agent-review', state: 'success', creator: { login: 'example-owner' } }]);
+    assert.match(review(), /: passed, 2 consensus \(github agent-review by example-owner\)/);
   });
 });
