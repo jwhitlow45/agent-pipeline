@@ -58,7 +58,8 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 | `checks.e2e.command` | `null` | The command for one e2e file, with `{file}`. |
 | `checks.e2e.files` | `[]` | Every e2e file. `--e2e all` runs them all. |
 | `checks.e2e.always` | `[]` | Files every lane runs, whatever it touched. |
-| `checks.e2e.beforeEach` | `null` | A command before each file, such as clearing rate limits. |
+| `checks.e2e.beforeEach` | `null` | A command before each file, such as clearing rate limits. When it fails or runs out of time, that file fails without running. |
+| `checks.e2e.beforeEachTimeoutSec` | `300` | Per run of `beforeEach`. |
 | `checks.e2e.timeoutSec` | `1800` | Per file. |
 | `checks.env` | `{}` | Environment for every check. A lane's `--env` adds to it (ports, database URLs). |
 | `checks.stopOnFailure` | `true` | A failed phase stops later phases. |

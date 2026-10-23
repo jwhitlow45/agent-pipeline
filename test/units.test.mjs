@@ -54,6 +54,23 @@ test('check gaps name what has not run, what failed, and a phase that ran before
   assert.deepEqual(checkGaps(steps.slice(0, 1), results), []);
 });
 
+test('an e2e file whose beforeEach fails or runs out of time fails without running', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pipeline-checks-'));
+  const ran = join(dir, 'ran.txt');
+  const e2e = (beforeEach) => ({ ...DEFAULTS.checks.e2e, command: `echo {file} >> ${ran}; echo "# pass 1"`, files: ['a', 'b'], beforeEach, beforeEachTimeoutSec: 1 });
+  const cfg = config({ checks: { ...DEFAULTS.checks, keepAwake: false, stopOnFailure: false, e2e: e2e('test {file} = b || exit 3') } });
+  const results = await runChecks(plan(cfg, ['a', 'b']), { cwd: dir, env: {}, dir, config: cfg });
+  assert.deepEqual(results.map((result) => [result.name, result.exit, result.prepareExit ?? null]), [['e2e:a', 3, 3], ['e2e:b', 0, null]]);
+  assert.deepEqual(readFileSync(ran, 'utf8').trim().split('\n'), ['b']);
+  assert.match(readFileSync(results[0].log, 'utf8'), /beforeEach exited 3, so e2e:a did not run/);
+  const slow = config({ checks: { ...DEFAULTS.checks, keepAwake: false, e2e: e2e('sleep 5') } });
+  const started = Date.now();
+  const [timedOut] = await runChecks(plan(slow, ['a']), { cwd: dir, env: {}, dir, config: slow });
+  assert.ok(Date.now() - started < 4000);
+  assert.notEqual(timedOut.exit, 0);
+  assert.match(readFileSync(timedOut.log, 'utf8'), /SIGTERM, over 1s/);
+});
+
 test('runChecks runs the parallel phase side by side, logs each check, and stops after a failed phase', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'pipeline-checks-'));
   const marker = join(dir, 'order.txt');
