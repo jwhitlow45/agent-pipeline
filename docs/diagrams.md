@@ -93,7 +93,7 @@ Source: [diagrams/hotfix.excalidraw](diagrams/hotfix.excalidraw).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/live-play-dark.png">
-  <img src="images/live-play.png" alt="Flowchart of the live play loop: play the deployed build, record what each client receives, fix bugs or ask the owner, then report, decide and ship the fixes as a hotfix run." width="1178">
+  <img src="images/live-play.png" alt="Flowchart of the live play loop: exercise an isolated instance of the deployed commit the way its real users or clients would, check access boundaries where there are any, fix bugs or ask the owner, then report, decide and ship the fixes as a hotfix run." width="1178">
 </picture>
 
 Source: [diagrams/live-play.excalidraw](diagrams/live-play.excalidraw).
@@ -111,7 +111,7 @@ Source: [diagrams/gate.excalidraw](diagrams/gate.excalidraw).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/deploy-steps-dark.png">
-  <img src="images/deploy-steps.png" alt="Sequence diagram of a deploy between the coordinator, pipeline, GitHub, the server and the user, with the deploy check, who runs the deploy, the deploy record, the notification and cleanup." width="1288">
+  <img src="images/deploy-steps.png" alt="Sequence diagram of a deploy between the coordinator, pipeline, GitHub, the deploy target and the user, with the deploy check, who runs the deploy, the post-deploy checks, the deploy record, the notification and cleanup." width="1288">
 </picture>
 
 Source: [diagrams/deploy-steps.excalidraw](diagrams/deploy-steps.excalidraw).
