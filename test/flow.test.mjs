@@ -868,14 +868,21 @@ describe('pipeline doctor', () => {
   // PA-46: rules on sample names, an unrelated required status and self-review allowed.
   test('reads coverage across every ref, the pipeline\'s contexts and self-review, not sample names', () => {
     box.ghScript([...rulesets([
-      ruleset(1, 'branch', ['refs/heads/main'], [{ type: 'pull_request' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'lint', integration_id: 9 }] } }, { type: 'non_fast_forward' }, { type: 'deletion' }]),
+      ruleset(1, 'branch', ['refs/heads/main'], [{ type: 'pull_request' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'lint', integration_id: 9 }, { context: 'e2e' }] } }, { type: 'non_fast_forward' }, { type: 'deletion' }]),
       ruleset(2, 'branch', ['refs/heads/any-branch-name'], [{ type: 'non_fast_forward' }, { type: 'deletion' }]),
       ruleset(3, 'branch', ['~ALL'], [{ type: 'non_fast_forward' }], ['refs/heads/ci/**']),
       ruleset(4, 'tag', ['refs/tags/v1'], [{ type: 'creation' }, { type: 'update' }, { type: 'deletion' }]),
     ]), environments(false), repoRule(false)]);
     const result = box.cli(['doctor']);
     assert.equal(result.code, 1);
-    for (const missing of [/missing +main requires the pipeline's checks \(pipeline\/scan, pipeline\/ci, pipeline\/review\)\. Require pipeline\/scan, pipeline\/ci, pipeline\/review/, /missing +no branch can be force pushed/, /missing +no branch can be deleted/, /missing +tags can be created/, /missing +the production environment prevents self-review/]) assert.match(result.out, missing);
+    for (const missing of [/missing +main requires the pipeline's checks \(pipeline\/scan, pipeline\/ci, pipeline\/review\)\. Require pipeline\/scan, pipeline\/ci, pipeline\/review/, /missing +no branch can be force pushed/, /missing +no branch can be deleted/, /missing +tags can be created/, /missing +the production environment prevents self-review/, /missing +every required check on main names the GitHub App that must set it\. Set the expected source of e2e to its GitHub App/]) assert.match(result.out, missing);
+  });
+
+  test('names a production environment no reviewer guards', () => {
+    box.ghScript([...complete, { match: 'environments?', stdout: { environments: [{ name: 'production', protection_rules: [] }] } }, repoRule(false)]);
+    const result = box.cli(['doctor']);
+    assert.equal(result.code, 1);
+    assert.match(result.out, /missing +the production environment requires a reviewer\. Add the user as a required reviewer on production/);
   });
 
   test('names each missing backstop and how to add it, the pre-push hook included', () => {

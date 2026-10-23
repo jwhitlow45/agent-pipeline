@@ -117,12 +117,15 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'GIT push --force origin main', 2, FORCE],
     ['repo', 'Git push --force origin main', 2, FORCE],
     ['ws', 'JJ git push -b feature', 2, NOT_OURS],
+    // PA-39: after --, a --help is a positional word, not help.
+    ['ws', 'jj git push -b feature -- --help', 2, NOT_OURS],
     ['repo', '/usr/bin/GIT push --force origin main', 2, FORCE],
     ['repo', 'x', 2, /inside a .git or .jj folder/, { tool_name: 'Edit', tool_input: { file_path: '.GIT/config', old_string: 'a', new_string: 'b' } }],
     ['repo', 'echo "[alias] p = push" >> .Git/config', 2, /inside a .git or .jj folder/],
     ['repo', 'x', 2, /inside a .git or .jj folder/, { tool_name: 'Write', tool_input: { file_path: 'docs/../.JJ/repo/config.toml', content: 'x' } }],
     ['repo', 'CURL -X POST https://api.github.com/repos/x/y/merges', 2, /curl -X writes to GitHub/],
     ['repo', 'BASH -c "$CMD"', 2, DYNAMIC],
+    ['repo', 'nohup GIT push --force origin main', 2, through('nohup')],
     ['repo', 'git --no-pager push origin %S2%:refs/heads/ci/x', 2, UNSCANNED],
     ['repo', 'git -c core.hooksPath=/dev/null push origin %tip%:refs/heads/ci/x', 2, /It sets -c for git/],
     ['repo', 'GIT_DIR=/x git push origin %tip%:refs/heads/ci/x', 2, /sets GIT_DIR/],
@@ -504,6 +507,8 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'jj diff --tool sh', 2, /jj diff --tool is not an option the gate reads/],
     ['repo', 'jj log --too=sh', 2, /not an option the gate reads/],
     ['repo', 'git status && sort -T .git README.md', 2, /sort has an option the gate does not read|inside a .git/],
+    ['repo', 'git status && sort --compress-program=gzip README.md', 2, /has an option the gate does not read \(--compress-program=gzip\)/],
+    ['repo', 'git status && xxd README.md out.bin', 2, /has an option the gate does not read \(out\.bin\)/],
     ['repo', 'git log | tee .git/config', 2, /inside a .git or .jj folder/],
     ['repo', 'git log | head --bytes=5 --weird', 2, /with an option the gate does not read \(--weird\)/],
     ['repo', 'git archive -o .git/config HEAD', 2, /inside a .git or .jj folder/],
@@ -526,6 +531,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'gh pr close 7 --delete-branch', 0],
     ['repo', 'gh pr close 9', 0],
     ['repo', 'gh pr close 9 --comment --delete-branch', 0],
+    ['repo', 'gh pr close 9 --delete', 2, /gh pr close has an option the gate does not read \(--delete\)/],
     ['repo', 'gh pr merge 9 --delete-branch --squash', 2, /deletes feature/],
     // R3-5: curl reads headers and variables from files.
     ['repo', 'curl -H @headers.txt https://api.github.com/repos/x/y', 2, /reads a header from a file/],
@@ -919,6 +925,24 @@ describe('the gate answers before the hook times out (PA-35)', () => {
   });
 });
 
+// R3-2: a deploy revision is read in the workspace the script runs in.
+describe('a deploy revision is read where the script runs', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, match: 'release\\.sh' } } });
+  after(() => box.cleanup());
+  box.write('scripts/release.sh', '#!/bin/sh\necho deploying "$@"\n', box.root);
+  box.write('pipeline.local.json', JSON.stringify({ deploy: { command: `${join(box.root, 'scripts', 'release.sh')} {name} {tip}` } }));
+  box.sh(`chmod +x ${join(box.root, 'scripts', 'release.sh')}`);
+  box.cli(['config', '--check']);
+  // Here @- is two commits, a merge's parents. In the lane workspace it is main.
+  box.sh('jj new main -m s1 && jj new main -m s2 && jj new \'description(exact:"s1\n")\' \'description(exact:"s2\n")\'');
+  box.sh('jj workspace add --name lane ../lane -r main');
+  runRows(box, { repo: box.repo, root: box.root, lane: join(box.root, 'lane') }, [
+    ['repo', '%root%/scripts/release.sh b1 @-', 2, /must name exactly one commit, found 2/],
+    ['lane', '%root%/scripts/release.sh b1 @-', 2, /No pipeline run records/],
+    ['root', '%root%/scripts/release.sh b1 @-', 2, /names a working copy, and this runs outside the repository's workspaces/],
+  ]);
+});
+
 describe('a repository with two GitHub remotes', () => {
   const box = sandbox({ config: baseConfig });
   after(() => box.cleanup());
@@ -1048,4 +1072,16 @@ describe('everyday forms', () => {
     'git log --since=2.weeks --author=Test --stat | tail -20', 'jj log -r ::@ -n 3 | sort -u | uniq -c',
   ];
   runRows(box, { repo: box.repo }, forms.map((form) => ['repo', form, 0]));
+});
+
+// PA-44: a protected folder that does not exist yet is still protected in any case.
+describe('a protected folder that does not exist yet', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  box.env.XDG_CONFIG_HOME = join(box.root, 'xdg');
+  runRows(box, { repo: box.repo, root: box.root }, [
+    ['repo', 'x', 2, /gh's config folder/, { tool_name: 'Write', tool_input: { file_path: '%root%/xdg/gh/config.yml', content: 'pager: sh' } }],
+    ['repo', 'x', 2, /gh's config folder/, { tool_name: 'Write', tool_input: { file_path: '%root%/XDG/Gh/config.yml', content: 'pager: sh' } }],
+    ['repo', 'x', 0, null, { tool_name: 'Write', tool_input: { file_path: '%root%/xdg/other/config.yml', content: 'x' } }],
+  ]);
 });

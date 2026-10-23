@@ -263,3 +263,45 @@ test('the example deploy keeps failures through its pipes and checks the contain
   const checks = script.split('\n').findIndex((line) => line.includes('HTTP check failed'));
   assert.ok(checks !== -1 && publish > checks, 'main moves only after the checks');
 });
+
+// PA-38: each read passes only with options from its exact list, values counted.
+test('read option lists take only listed options, each with its values', async () => {
+  const { GIT_READ_OPTIONS, JJ_READ_OPTIONS, optionProblem, READ_OPTIONS } = await import('../lib/options.mjs');
+  const cases = [
+    [READ_OPTIONS.head, ['-n', '5', 'x'], null], [READ_OPTIONS.head, ['-5'], null], [READ_OPTIONS.head, ['--lines'], '--lines'], [READ_OPTIONS.head, ['-n'], '-n'],
+    [READ_OPTIONS.head, ['--lines=3'], null], [READ_OPTIONS.head, ['--bites=3'], '--bites=3'], [READ_OPTIONS.head, ['--quiet=yes'], '--quiet=yes'],
+    [READ_OPTIONS.less, ['+!sh', 'x'], '+!sh'], [READ_OPTIONS.cat, ['+x'], null], [READ_OPTIONS.xxd, ['a', 'b'], 'b'], [READ_OPTIONS.xxd, ['-r', 'a'], null],
+    [READ_OPTIONS.sort, ['-o', 'x'], '-o'], [READ_OPTIONS.sort, ['-rn', '-k', '2', 'x'], null], [READ_OPTIONS.jq, ['--arg', 'a', 'b', '.'], null], [READ_OPTIONS.jq, ['--arg', 'a'], '--arg'],
+    [READ_OPTIONS.echo, ['-n', '--anything'], null], [undefined, ['-x'], '-x'], [undefined, ['x', '-'], null],
+    [GIT_READ_OPTIONS.diff, ['--out=x'], '--out=x'], [GIT_READ_OPTIONS.diff, ['--', '--output=x'], null], [GIT_READ_OPTIONS.status, ['-uno', '-sb'], null], [GIT_READ_OPTIONS.grep, ['-Oprintf'], '-Oprintf'],
+    [JJ_READ_OPTIONS.diff, ['--tool', 'sh'], '--tool'], [JJ_READ_OPTIONS.log, ['-r', '@', '-T', 'commit_id', '--no-graph'], null],
+  ];
+  for (const [options, words, want] of cases) assert.equal(optionProblem(options, words), want, words.join(' '));
+});
+
+// PA-43: the workflow reader names what it cannot read, and reads every environment form it can.
+test('the workflow reader reads environments in any form it is sure of, and refuses the rest', async () => {
+  const { readWorkflow } = await import('../lib/workflow-file.mjs');
+  const job = (body) => `jobs:\n  a:\n${body}`;
+  const read = [
+    [job('    environment: production\n'), ['production']],
+    [job("    environment: 'staging'\n"), ['staging']],
+    [job('    environment:\n      url: https://x\n      name: production\n'), ['production']],
+    [job('    environment: { url: "https://x", name: production }\n'), ['production']],
+    [job('    steps:\n    - run: |\n        environment: production\n'), []],
+    [`name: Ship\non:\n  workflow_dispatch:\n    inputs:\n      environment:\n        type: string\n${job('    runs-on: x\n')}`, []],
+  ];
+  for (const [text, environments] of read) assert.deepEqual([readWorkflow(text).environments, readWorkflow(text).unreadable], [environments, null], text);
+  const refused = [
+    ['jobs:\n\ta:\n', /indents with a tab/], ['---\na: 1\n---\nb: 2\n', /more than one YAML document/], ['just text\n', /top-level line is not a key/], ['<<: *x\n', /merges a mapping in at the top/],
+    ['jobs: {}\n', /jobs are not a block mapping/], ['jobs:\n  a:\n    x: 1\n b:\n', /job is indented less/], ['jobs:\n  - a\n', /job is not a plain key/], ['jobs:\n  a: x\n', /job a is not a block mapping/],
+    [job('      x: 1\n    y: 2\n'), /key indented less/], [job('    just text\n'), /a line of job a is not a key/], [job('    <<: *defaults\n'), /job a merges a mapping in/],
+    [job('    uses: ${{ inputs.w }}\n'), /calls a workflow the gate cannot read/], [job('    environment: production\n      more\n'), /continues on the next line/],
+    [job('    environment: [production]\n'), /an environment is an expression or a form/], [job('    environment: ${{ inputs.e }}\n'), /an environment is an expression or a form/],
+    [job('    environment:\n    runs-on: x\n'), /an environment is empty/], [job('    environment:\n        name: a\n      url: b\n'), /field is indented less/],
+    [job('    environment:\n      just text\n'), /an environment is not a mapping/], [job('    environment:\n      <<: *prod\n'), /environment merges a mapping in/],
+    [job('    environment:\n      name: a\n      name: b\n'), /names itself twice/], [job('    environment:\n      name: ${{ inputs.e }}\n'), /environment name is an expression/],
+    [job('    environment:\n      url: https://x\n'), /mapping has no name/],
+  ];
+  for (const [text, why] of refused) assert.match(readWorkflow(text).unreadable ?? '(read)', why, text);
+});
