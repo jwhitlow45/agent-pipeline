@@ -30,7 +30,7 @@ Each rule came from something that went wrong once.
 - **Delete merged branches.** The public repository was collecting a stale `ci/*` branch per CI run.
 - **Diagnose e2e failures at once.** Waiting for a 50-minute run to end before looking at a failure from minute five wasted most of an hour each time.
 - **Randomized tests for state machines.** Three review rounds in a row each found a regression of the same shape in retry and cancel code.
-- **Compare git's main with jj's before bundling.** After moving main from another workspace, git's `refs/heads/main` lagged, and a deploy bundle shipped the old main. The deploy script checks and fixes it.
+- **Bundle the commit itself.** After moving main from another workspace, git's `refs/heads/main` lagged, and a deploy bundle shipped the old main. The deploy script now bundles the exact local commit under a ref of its own, checks the server runs that commit, and publishes main only after the checks pass.
 - **Linux CI only.** macOS runners were far slower, so an e2e file goes on a macOS list only when it fails on Linux from font metrics alone.
 
 ## A caution about stacked reviews

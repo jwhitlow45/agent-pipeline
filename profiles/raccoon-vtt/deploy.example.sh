@@ -2,36 +2,39 @@
 # The raccoon-vtt deploy, with every private value replaced by a placeholder. The real script lives
 # outside the repository, since it names the server, and pipeline.local.json points deploy.command at it.
 #
-# usage: deploy.sh <name> <jj rev for main> <the server's current HEAD sha>
+# usage: deploy.sh <name> <jj rev to deploy> <the server's current HEAD sha> [run]
 #
-# The server has no GitHub key, so the release travels as a git bundle. Each step prints what
+# It asks the pipeline first, deploys the exact local commit, checks the server, and only then moves
+# main on GitHub. A fix for a hole that is live on the server is never published before the server
+# runs it, and a deploy that fails its checks never reaches main. The server has no GitHub key, so
+# the release travels as a git bundle built from the local commit. Each step prints what
 # `pipeline deploy record` needs: the backup's name, health, restarts, the room load check, HTTP codes.
 set -e
-NAME=$1; REV=$2; PREV=$3
+NAME=$1; REV=$2; PREV=$3; RUN=${4:-$1}
 SCRATCH=<scratch folder>
 APP='<app folder on the server>'
 
 cd <main workspace>
+# The pipeline's own check of this exact commit. It exits 1 and says why when anything is missing.
+SHA=$(jj log --no-graph -r "$REV" -T commit_id)
+pipeline deploy check --run "$RUN" --tip "$SHA" --name "$NAME" --prev "$PREV"
+
 # The server must be where the last deploy left it, with a clean tree.
 H=$(ssh <deploy-host> "cd $APP && git status --short | head -3; git rev-parse HEAD")
 echo "server: $H"
 [ "$H" = "$PREV" ] || { echo "server HEAD is not $PREV or tree dirty"; exit 1; }
 
-jj bookmark set main -r $REV 2>&1 | tail -1
-jj git push --bookmark main 2>&1 | tail -1
-git fetch -q origin main
-# After jj moves main from another workspace, git's refs/heads/main can lag behind, and the bundle
-# would ship the old main. Compare it with origin/main before bundling.
-[ "$(git rev-parse refs/heads/main)" = "$(git rev-parse origin/main)" ] || git update-ref refs/heads/main $(git rev-parse origin/main)
-echo "origin/main $(git rev-parse origin/main)"
-git bundle create -q $SCRATCH/$NAME.bundle $PREV..main
-scp -q $SCRATCH/$NAME.bundle <deploy-host>:/tmp/app-$NAME.bundle
+# The bundle holds the local commit itself, under a ref of its own, never main as GitHub has it.
+git update-ref "refs/deploy/$NAME" "$SHA"
+git bundle create -q "$SCRATCH/$NAME.bundle" "refs/deploy/$NAME" "^$PREV"
+git update-ref -d "refs/deploy/$NAME"
+scp -q "$SCRATCH/$NAME.bundle" <deploy-host>:/tmp/app-$NAME.bundle
 
-# Backup first, then pull the bundle and rebuild.
-ssh <deploy-host> "cd $APP && D=\$(date -u +%Y%m%d-%H%M) && docker compose -f docker-compose.server.yml exec -T postgres pg_dump -U <db user> -d <db name> --format=custom > backups/db-\$D-before-$NAME.dump && ls -l backups/db-\$D-before-$NAME.dump | awk '{print \$5, \$9}' && git pull -q --ff-only /tmp/app-$NAME.bundle main && git rev-parse HEAD && docker compose -f docker-compose.server.yml up -d --build 2>&1 | tail -1"
+# Backup first, then move to the bundle's commit and rebuild.
+ssh <deploy-host> "cd $APP && D=\$(date -u +%Y%m%d-%H%M) && docker compose -f docker-compose.server.yml exec -T postgres pg_dump -U <db user> -d <db name> --format=custom > backups/db-\$D-before-$NAME.dump && ls -l backups/db-\$D-before-$NAME.dump | awk '{print \$5, \$9}' && git fetch -q /tmp/app-$NAME.bundle refs/deploy/$NAME && git merge -q --ff-only FETCH_HEAD && [ \"\$(git rev-parse HEAD)\" = $SHA ] && git rev-parse HEAD && docker compose -f docker-compose.server.yml up -d --build 2>&1 | tail -1"
 
 # Health, restarts, and the app's own load check: every stored room loads and replays.
-ssh <deploy-host> "cd $APP && for i in \$(seq 1 60); do s=\$(docker inspect -f '{{.State.Health.Status}}' <app container>); [ \"\$s\" = healthy ] && break; sleep 2; done; echo \$s; docker inspect -f 'restarts={{.RestartCount}}' <app container> && docker compose -f docker-compose.server.yml exec -T <app service> node --input-type=module -" <<'EOF'
+ssh <deploy-host> "cd $APP && for i in \$(seq 1 60); do s=\$(docker inspect -f '{{.State.Health.Status}}' <app container>); [ \"\$s\" = healthy ] && break; sleep 2; done; echo \$s; [ \"\$s\" = healthy ] && docker inspect -f 'restarts={{.RestartCount}}' <app container> && docker compose -f docker-compose.server.yml exec -T <app service> node --input-type=module -" <<'EOF2'
 import { getPool } from "/app/server/db.ts";
 import { loadRoom } from "/app/server/rooms/persistence.ts";
 const pool = getPool(process.env.DATABASE_URL);
@@ -43,11 +46,19 @@ for (const r of rows) {
 }
 console.log("rooms ok", ok, "of", rows.length, bad.join(", "));
 await pool.end();
-EOF
+if (bad.length) process.exit(1);
+EOF2
 
 # Warnings and errors in the last five minutes of logs, then tidy up.
 ssh <deploy-host> "cd $APP && docker compose -f docker-compose.server.yml logs --since 5m <app service> 2>&1 | grep -E '\"level\":(40|50|60)' | head -5; echo '-- logs end'; rm -f /tmp/app-$NAME.bundle"
-rm -f $SCRATCH/$NAME.bundle
+rm -f "$SCRATCH/$NAME.bundle"
 
-# The HTTP checks.
-for u in / /docs /docs/dm-guide; do curl -s -o /dev/null -w "%{http_code} " https://<private-domain>$u; done; echo
+# The HTTP checks. A code other than 2xx or 3xx stops the deploy before main moves.
+codes=""
+for u in / /docs /docs/dm-guide; do codes="$codes$(curl -s -o /dev/null -w '%{http_code}' https://<private-domain>$u) "; done
+echo "$codes"
+for c in ${=codes}; do [[ $c == [23]?? ]] || { echo "HTTP check failed: $c. main stays where it was."; exit 1; }; done
+
+# Only now, with the server running and checked, is the commit published.
+jj bookmark set main -r "$SHA" 2>&1 | tail -1
+jj git push --bookmark main 2>&1 | tail -1
