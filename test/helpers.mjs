@@ -61,9 +61,11 @@ export function sandbox({ config = {}, local = null } = {}) {
 
   const box = {
     root, repo, bare, env, sh,
+    // A hook runs under a time limit, so a call that hangs (an alias that expands forever) fails its test.
     cli(args, { cwd = repo, input, extra = {} } = {}) {
-      const result = spawnSync(process.execPath, [CLI, ...args], { cwd, env: { ...env, ...extra }, input, encoding: 'utf8' });
-      return { code: result.status, out: result.stdout, err: result.stderr, all: `${result.stdout}${result.stderr}` };
+      const result = spawnSync(process.execPath, [CLI, ...args], { cwd, env: { ...env, ...extra }, input, encoding: 'utf8', timeout: 60_000 });
+      const err = `${result.stderr ?? ''}${result.error ? `\n${result.error.message}` : ''}`;
+      return { code: result.status, out: result.stdout, err, all: `${result.stdout}${err}` };
     },
     write(path, text, cwd = repo) {
       mkdirSync(dirname(join(cwd, path)), { recursive: true });
