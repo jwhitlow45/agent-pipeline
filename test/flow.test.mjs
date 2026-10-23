@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { baseConfig, builtRun, ciScript, CLI, sandbox, SLUG, WORDS } from './helpers.mjs';
+import { baseConfig, builtRun, ciScript, CLI, sandbox, SLUG, WORDS, WORKFLOWS, workflowsRule } from './helpers.mjs';
 
 describe('intake, briefs and design', () => {
   const box = sandbox({ config: { ...baseConfig, brief: { preamble: 'agent-preamble.md' }, design: { requiredSections: ['Tests'] }, review: { provider: 'agent-review' } } });
@@ -274,11 +274,15 @@ describe('scan, push, CI, review and deploy', () => {
   });
 
   test('CI records only a run of ci.workflow on the exact commit, in this repository', () => {
-    const view = (id, fields) => ({ match: `run view ${id}`, stdout: { databaseId: id, status: 'completed', conclusion: 'success', url: `https://github.com/${SLUG}/actions/runs/${id}`, headSha: tip, workflowName: 'CI', jobs: [], ...fields } });
-    box.ghScript([view(78, { headSha: 'f'.repeat(40) }), view(79, { workflowName: 'Lint' }), view(80, { url: 'https://github.com/other-owner/other/actions/runs/80' })]);
+    const view = (id, fields) => ({ match: `run view ${id}`, stdout: { databaseId: id, status: 'completed', conclusion: 'success', url: `https://github.com/${SLUG}/actions/runs/${id}`, headSha: tip, workflowName: 'CI', workflowDatabaseId: 7, jobs: [], ...fields } });
+    box.ghScript([workflowsRule(), view(78, { headSha: 'f'.repeat(40) }), view(79, { workflowName: 'Lint', workflowDatabaseId: 9 }), view(80, { url: 'https://github.com/other-owner/other/actions/runs/80' })]);
     assert.match(box.cli(['ci', '--run', 'dark', '--run-id', '78']).err, /ran on ffffffffffff, not/);
-    assert.match(box.cli(['ci', '--run', 'dark', '--run-id', '79']).err, /run of Lint, which is not in ci.workflow/);
+    assert.match(box.cli(['ci', '--run', 'dark', '--run-id', '79']).err, /run of Lint \(workflow 9\), which is not in ci.workflow \(.github\/workflows\/ci.yml\)/);
     assert.match(box.cli(['ci', '--run', 'dark', '--run-id', '80']).err, /is not in example-owner\/demo/);
+    // A second workflow that calls itself CI makes the name ambiguous, and its runs never count for ci.yml.
+    const impostor = { id: 9, name: 'CI', path: '.github/workflows/fake.yml', state: 'active' };
+    box.ghScript([workflowsRule([...WORKFLOWS, impostor])]);
+    assert.match(box.cli(['ci', '--run', 'dark']).err, /ci.workflow: CI names 2 workflows .*Name it by its file/);
     box.ghScript([]);
   });
 

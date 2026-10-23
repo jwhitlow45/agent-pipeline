@@ -65,9 +65,9 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     { match: 'git/ref/heads/ci/both', stdout: { object: { type: 'commit', sha: tip } } },
     { match: 'git/ref/tags/ci/both', stdout: { object: { type: 'commit', sha: tip } } },
     { match: 'git/ref/tags/', exit: 1, stderr: 'gh: Not Found (HTTP 404)' },
-    { match: `run view 11 -R ${SLUG}`, stdout: { workflowName: 'Deploy production' } },
-    { match: `run view 5 -R ${SLUG}`, stdout: { workflowName: 'Deploy' } },
-    { match: `run view 9 -R ${SLUG}`, stdout: { workflowName: 'CI' } },
+    { match: `actions/runs/11`, stdout: { workflow_id: 11, name: 'Deploy production', path: '.github/workflows/deploy-prod.yml' } },
+    { match: `actions/runs/5`, stdout: { workflow_id: 8, name: 'Deploy', path: '.github/workflows/deploy.yml' } },
+    { match: `actions/runs/9`, stdout: { workflow_id: 7, name: 'CI', path: '.github/workflows/ci.yml' } },
     { match: 'alias list', stdout: "dep:\t'!gh workflow run deploy.yml --ref main'\na1:\ta2\na2:\ta1\n" },
   ]);
   Object.assign(values, { ws, tip, S1, S2, tip12: tip.slice(0, 12) });

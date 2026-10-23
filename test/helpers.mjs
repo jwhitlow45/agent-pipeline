@@ -121,7 +121,12 @@ export function builtRun(box, { run = 'dark', lane = 'a', intake = [] } = {}) {
   return { ws, tip: box.run(run).tip };
 }
 
+// The repository's workflows as GitHub lists them: CI is workflow 7, in ci.yml.
+export const WORKFLOWS = [{ id: 7, name: 'CI', path: '.github/workflows/ci.yml', state: 'active' }, { id: 8, name: 'Deploy', path: '.github/workflows/deploy.yml', state: 'active' }];
+export const workflowsRule = (list = WORKFLOWS) => ({ match: 'actions/workflows?per_page=100', stdout: { total_count: list.length, workflows: list } });
+
 export const ciScript = (tip, { jobs = [{ name: 'e2e (1)', status: 'completed', conclusion: 'success' }], conclusion = 'success' } = {}) => [
-  { match: 'run list', stdout: [{ databaseId: 77, status: 'completed', conclusion, workflowName: 'CI', headSha: tip, url: `https://github.com/${SLUG}/actions/runs/77`, createdAt: '2026-01-01T00:00:00Z' }] },
-  { match: 'run view 77', stdout: { databaseId: 77, status: 'completed', conclusion, url: `https://github.com/${SLUG}/actions/runs/77`, headSha: tip, workflowName: 'CI', jobs } },
+  workflowsRule(),
+  { match: 'run list', stdout: [{ databaseId: 77, status: 'completed', conclusion, workflowName: 'CI', workflowDatabaseId: 7, headSha: tip, url: `https://github.com/${SLUG}/actions/runs/77`, createdAt: '2026-01-01T00:00:00Z' }] },
+  { match: 'run view 77', stdout: { databaseId: 77, status: 'completed', conclusion, url: `https://github.com/${SLUG}/actions/runs/77`, headSha: tip, workflowName: 'CI', workflowDatabaseId: 7, jobs } },
 ];
