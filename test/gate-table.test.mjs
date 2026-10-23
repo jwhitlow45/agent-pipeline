@@ -1,16 +1,23 @@
-// The gate against every command form the round 1 reviews found, each with the exit code it must
+// The gate against every command form the round 1 and round 2 reviews found, each with the exit code it must
 // give: 2 refuses, 0 allows. Rows run in order on one sandbox per block, and a `setup` row changes
 // the sandbox for the rows after it.
 
 import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { join } from 'node:path';
-import { baseConfig, builtRun, sandbox, SLUG } from './helpers.mjs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { ALL_WORKFLOWS, baseConfig, builtRun, sandbox, SLUG, workflowsRule } from './helpers.mjs';
 
 const FORCE = /force push/;
 const NOT_OURS = /is not a branch agents push to/;
 const UNSCANNED = /without a passed pre-push scan/;
-const EARLIER = /earlier command on this line/;
+const EARLIER = /runs before .* and can change what it acts on/;
+const DYNAMIC = /built at run time/;
+const PIPE = /a pipe may lead only into/;
+const SEPARATOR = /joined to other commands by/;
+const through = (name) => new RegExp(`through ${name}, which the gate does not read`);
+const builtin = (tool) => new RegExp(`${tool} [^ ]+ is not a ${tool} built-in command`);
 
 // Fills %repo%, %ws%, %tip% and the like into a row's command.
 const fill = (text, values) => text.replace(/%(\w+)%/g, (whole, key) => values[key] ?? whole);
@@ -21,9 +28,11 @@ function runRows(box, values, rows) {
       test(`setup: ${row.name}`, () => row.setup(box, values));
       continue;
     }
-    const [where, command, code, pattern, payload] = row;
+    const [where, command, code, pattern, rawPayload] = row;
     const text = fill(command, values);
-    test(`${code === 2 ? 'refuses' : 'allows'} ${text.replace(/\n/g, '\\n')}${where === 'root' ? ' (from outside the repository)' : ''}`, () => {
+    const payload = rawPayload && JSON.parse(fill(JSON.stringify(rawPayload), values));
+    const shown = payload?.tool_input && !payload.tool_input.command ? `${payload.tool_name} ${payload.tool_input.file_path ?? payload.tool_input.notebook_path}` : text;
+    test(`${code === 2 ? 'refuses' : 'allows'} ${shown.replace(/\n/g, '\\n')}${where === 'root' ? ' (from outside the repository)' : ''}`, () => {
       const result = box.gate(text, values[where], payload);
       assert.equal(result.code, code, result.err || '(allowed)');
       if (pattern) assert.match(result.err, pattern);
@@ -57,6 +66,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
   box.write('../bad-note.md', '# Note\n');
   box.cli(['design', '--run', 'dsg', '--note', '../bad-note.md', '--review-topic', 'dsgtopic']);
   box.ghScript([
+    workflowsRule(ALL_WORKFLOWS),
     { match: 'pr view 6 ', stdout: { baseRefName: 'main', headRefName: 'ci/dark', headRefOid: 'a'.repeat(40), isDraft: false } },
     { match: 'pr view 7 ', stdout: { baseRefName: 'main', headRefName: 'ci/dark', headRefOid: tip, isDraft: false } },
     { match: 'pr view 8 ', stdout: { baseRefName: 'ci/base', headRefName: 'ci/dark', headRefOid: tip, isDraft: false } },
@@ -76,47 +86,149 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['ws', 'jj bookmark set ci/new -r @- && jj git push -b ci/new', 0],
     // P1-1, PA-01: forms the old reader skipped
     ['ws', 'jj git pu"sh" -b feature', 2, NOT_OURS],
-    ['ws', "bash -o pipefail -c 'jj git push -b feature'", 2, NOT_OURS],
-    ['ws', "bash -o pipefail -c 'jj git push -b ci/fresh'", 0],
-    ['ws', "echo 'jj git push -b ci/fresh' | sh", 2, /sh reading its script from a pipe/],
-    ['ws', "sh <<'EOF'\njj git push -b feature\nEOF", 2, NOT_OURS],
-    ['ws', "sh <<'EOF'\njj git push -b ci/fresh\nEOF", 0],
-    ['ws', "$'jj' git push -b feature", 2, NOT_OURS],
-    ['ws', "env -S 'jj git push -b feature'", 2, NOT_OURS],
-    ['ws', "env -S 'jj git push -b ci/fresh'", 0],
-    ['ws', 'echo ci/fresh | xargs jj git push -b', 2, /xargs adds arguments/],
-    ['ws', 'sudo jj git push -b feature', 2, NOT_OURS],
-    ['ws', 'J=jj; $J git push -b ci/fresh', 2, /command name built at run time/],
-    ['ws', 'B=ci/fresh; jj git push -b "$B"', 2, /built at run time/],
+    // R2-3, PA-20 to PA-23, PA-31: a shell, wrapper or alias around a gated tool is refused, not read.
+    ['ws', "bash -o pipefail -c 'jj git push -b feature'", 2, through('bash')],
+    ['ws', "bash -o pipefail -c 'jj git push -b ci/fresh'", 2, through('bash')],
+    ['ws', "echo 'jj git push -b ci/fresh' | sh", 2, PIPE],
+    ['ws', "echo 'jj git push -b ci/fresh' | tee x.sh | sh", 2, PIPE],
+    ['ws', "sh <<'EOF'\njj git push -b feature\nEOF", 2, through('sh')],
+    ['ws', "sh <<'EOF'\njj git push -b ci/fresh\nEOF", 2, through('sh')],
+    ['ws', "$'jj' git push -b feature", 2, DYNAMIC],
+    ['ws', "env -S 'jj git push -b feature'", 2, through('env')],
+    ['ws', "env -S 'jj git push -b ci/fresh'", 2, through('env')],
+    ['ws', 'echo ci/fresh | xargs jj git push -b', 2, PIPE],
+    ['ws', 'sudo jj git push -b feature', 2, through('sudo')],
+    ['ws', 'J=jj; $J git push -b ci/fresh', 2, DYNAMIC],
+    ['ws', 'B=ci/fresh; jj git push -b "$B"', 2, SEPARATOR],
+    ['ws', 'jj git push -b "$B"', 2, DYNAMIC],
     ['root', 'jj -R %ws% git push -b feature', 2, NOT_OURS],
     ['root', 'jj -R %ws% git push -b ci/fresh', 0],
-    ['root', 'env -C %ws% jj git push -b feature', 2, NOT_OURS],
+    ['root', 'env -C %ws% jj git push -b feature', 2, through('env')],
     ['root', 'git -C %repo% push --force origin main', 2, FORCE],
     ['repo', 'git --no-pager push origin %S2%:refs/heads/ci/x', 2, UNSCANNED],
-    ['repo', 'git -c core.hooksPath=/dev/null push origin %tip%:refs/heads/ci/x', 2, /core\.hooksPath/],
-    ['repo', 'GIT_DIR=/x git push origin %tip%:refs/heads/ci/x', 2, /GIT_DIR/],
-    ['repo', 'export GIT_CONFIG_COUNT=1; git push origin %tip%:refs/heads/ci/x', 2, /GIT_CONFIG_COUNT/],
-    ['ws', 'jj --config \'aliases.x=["git","push","-b","feature"]\' x', 2, /aliases\.x/],
-    ['ws', 'jj --config git.push=fork git push -b ci/fresh', 2, /git\.push/],
+    ['repo', 'git -c core.hooksPath=/dev/null push origin %tip%:refs/heads/ci/x', 2, /It sets -c for git/],
+    ['repo', 'GIT_DIR=/x git push origin %tip%:refs/heads/ci/x', 2, /sets GIT_DIR/],
+    ['repo', 'export GIT_CONFIG_COUNT=1; git push origin %tip%:refs/heads/ci/x', 2, SEPARATOR],
+    ['ws', 'jj --config \'aliases.x=["git","push","-b","feature"]\' x', 2, /--config for this command/],
+    ['ws', 'jj --config git.push=fork git push -b ci/fresh', 2, /--config for this command/],
+    // PA-24: TOML spellings of the same key are refused with every other --config.
+    ['ws', 'jj --config \'"git".push="fork"\' git push -b ci/fresh', 2, /--config for this command/],
+    ['ws', 'jj --config \'git={push="fork"}\' git push -b ci/fresh', 2, /--config for this command/],
+    ['ws', 'jj --config-toml \'git.push="fork"\' git push -b ci/fresh', 2, /--config-toml/],
     ['ws', 'jj --config-file ../x.toml git push -b ci/fresh', 2, /config-file/],
-    ['ws', 'JJ_CONFIG=../x.toml jj git push -b ci/fresh', 2, /JJ_CONFIG/],
-    ['ws', 'JJ_CONFIG=../x.toml jj pp -b ci/fresh', 2, /cannot read the jj alias pp as jj will/],
-    ['ws', 'JJ_CONFIG=../x.toml jj log', 0],
-    ['ws', 'jj loop', 2, /expand more than five times/],
-    ['ws', 'jj weird', 2, /cannot read the jj alias weird/],
-    ['ws', 'jj "$SUB" -b ci/fresh', 2, /jj subcommand is built at run time/],
-    ['repo', 'git sp', 2, /git alias sp, a shell command/],
-    ['repo', 'git hp origin %tip%:refs/heads/ci/x', 2, /git alias hp sets core\.hooksPath/],
-    ['repo', 'git "$SUB" origin main', 2, /git subcommand is built at run time/],
-    ['repo', 'cd "$X" && git push origin main', 2, /Could not tell which directory/],
-    ['repo', "echo \"require('child_process').execSync('git push origin main')\" | node", 2, /node reading its program from stdin/],
-    ['ws', 'jj pp -b feature', 2, NOT_OURS],
-    ['repo', 'git p origin %tip%:refs/heads/feature', 2, NOT_OURS],
-    ['repo', 'git psuh origin main', 2, /autocorrect/],
-    ['ws', "node -e \"require('child_process').execSync('jj git push -b feature')\"", 2, /node code/],
+    ['ws', 'JJ_CONFIG=../x.toml jj git push -b ci/fresh', 2, /sets JJ_CONFIG/],
+    ['ws', 'JJ_CONFIG=../x.toml jj pp -b ci/fresh', 2, /sets JJ_CONFIG/],
+    ['ws', 'JJ_CONFIG=../x.toml jj log', 2, /sets JJ_CONFIG/],
+    ['ws', 'jj log', 0],
+    ['ws', 'jj loop', 2, builtin('jj')],
+    ['ws', 'jj weird', 2, builtin('jj')],
+    ['ws', 'jj "$SUB" -b ci/fresh', 2, DYNAMIC],
+    ['repo', 'git sp', 2, builtin('git')],
+    ['repo', 'git hp origin %tip%:refs/heads/ci/x', 2, builtin('git')],
+    ['repo', 'git "$SUB" origin main', 2, DYNAMIC],
+    ['repo', 'cd "$X" && git push origin main', 2, DYNAMIC],
+    ['repo', "echo \"require('child_process').execSync('git push origin main')\" | node", 2, PIPE],
+    ['ws', 'jj pp -b feature', 2, builtin('jj')],
+    ['repo', 'git p origin %tip%:refs/heads/feature', 2, builtin('git')],
+    ['repo', 'git psuh origin main', 2, builtin('git')],
+    ['ws', "node -e \"require('child_process').execSync('jj git push -b feature')\"", 2, through('node')],
     ['ws', 'echo "jj git push is documented here" > notes.txt', 0],
     ['ws', "cat <<'EOF' > notes.md\njj git push -b feature\nEOF", 0],
     ['ws', '[ -f x ] && jj git push -b ci/fresh', 0],
+    // Round 2: every form from probe1b, probe12 and probe20, and from astra's reply. Only the plain
+    // form passes: a shell, wrapper, interpreter or alias around a gated tool is refused, not read.
+    ['ws', "bash -O extglob -c 'jj git push --bookmark ci/fresh'", 2, through('bash')],
+    ['ws', "bash -s <<'EOF'\njj git push --bookmark ci/fresh\nEOF", 2, through('bash')],
+    ['ws', "jj git $'push' --bookmark feature", 2, DYNAMIC],
+    ['ws', 'jj git pu\\sh --bookmark feature', 2, NOT_OURS],
+    ['ws', 'jj git pu\\\nsh --bookmark feature', 2, NOT_OURS],
+    ['ws', `python3 -c "import os; os.system('jj git push --bookmark ci/fresh')"`, 2, through('python3')],
+    ['ws', `perl -e 'system("jj git push --bookmark ci/fresh")'`, 2, through('perl')],
+    ['ws', 'find . -maxdepth 0 -exec jj git push --bookmark ci/fresh \\;', 2, through('find')],
+    ['ws', 'find . -maxdepth 0 -execdir jj git push --bookmark ci/fresh \\;', 2, through('find')],
+    ['ws', "fish -c 'jj git push --bookmark ci/fresh'", 2, through('fish')],
+    ['ws', "busybox sh -c 'jj git push --bookmark ci/fresh'", 2, through('busybox')],
+    ['ws', "su $USER -c 'jj git push --bookmark ci/fresh'", 2, DYNAMIC],
+    ['ws', 'script -q /dev/null jj git push --bookmark ci/fresh', 2, through('script')],
+    ['ws', 'npx --yes jj git push --bookmark ci/fresh', 2, through('npx')],
+    ['ws', 'npm exec -- jj git push --bookmark ci/fresh', 2, through('npm')],
+    ['ws', "parallel ::: 'jj git push --bookmark ci/fresh'", 2, through('parallel')],
+    ['ws', 'flock /tmp/l jj git push --bookmark ci/fresh', 2, through('flock')],
+    ['ws', "trap 'jj git push --bookmark ci/fresh' EXIT", 2, through('trap')],
+    ['ws', 'coproc jj git push --bookmark ci/fresh', 2, /shell syntax \(coproc\)/],
+    ['ws', '! jj git push --bookmark ci/fresh', 2, /shell syntax \(!\)/],
+    ['ws', 'time jj git push --bookmark ci/fresh', 2, /shell syntax \(time\)/],
+    ['ws', 'command -p git push --force origin HEAD:main', 2, through('command')],
+    ['ws', 'command git push -v --force origin HEAD:main', 2, through('command')],
+    ['ws', 'exec jj git push --bookmark ci/fresh', 2, through('exec')],
+    ['ws', 'nohup jj git push --bookmark ci/fresh', 2, through('nohup')],
+    ['ws', 'nice -n 5 jj git push --bookmark ci/fresh', 2, through('nice')],
+    ['ws', 'false && cd /tmp; jj git push -b ci/fresh', 2, SEPARATOR],
+    ['ws', 'cd /tmp | true && jj git push -b ci/fresh', 2, PIPE],
+    ['ws', 'true || cd /tmp; jj git push -b ci/fresh', 2, SEPARATOR],
+    ['ws', 'true && cd /tmp && jj git push -b ci/fresh', 2, /a cd may only come first/],
+    ['ws', 'cd /no/such/folder && jj git push -b ci/fresh', 2, /not a folder here/],
+    ['ws', 'jj git push -b ci/fresh &', 2, /background/],
+    ['ws', '(jj git push -b ci/fresh)', 2, /subshell/],
+    ['ws', 'jj git push -b ci/fresh < /dev/null', 2, /reads its input from a redirection/],
+    ['ws', 'jj git push -b ci/fresh | sh', 2, PIPE],
+    ['ws', 'jj git push -b ci/fresh && jj git push -b ci/dark', 2, /more than one push/],
+    ['ws', 'jj git push -b ci/fresh && jj st', 2, /must come last on its line/],
+    ['ws', 'timeout 300 jj git push -b feature', 2, NOT_OURS],
+    ['ws', 'caffeinate -ims jj git push -b feature', 2, NOT_OURS],
+    ['ws', 'caffeinate -t 5 jj git push -b ci/fresh', 2, through('caffeinate')],
+    ['ws', 'timeout 300 caffeinate -i jj git push -b ci/fresh', 0],
+    ['ws', 'cd %ws% && jj git push -b ci/fresh', 0],
+    ['ws', 'git status | head -5', 0],
+    ['ws', 'jj log -r @ | grep x && jj git push -b ci/fresh', 0],
+    ['ws', "printf 'jj git push --bookmark feature\\n' > /tmp/pp.sh && sh /tmp/pp.sh", 0],
+    ['ws', 'make -C . push', 0],
+    ['repo', 'git -c core.askpass=x push origin ci/x', 2, /It sets -c for git/],
+    ['repo', 'git push --dry-run=false origin %tip%:refs/heads/ci/x', 2, /takes no value/],
+    ['repo', 'git --exec-path=/tmp push origin %tip%:refs/heads/ci/x', 2, /--exec-path/],
+    ['repo', 'git remote set-url origin https://github.com/someone/public.git', 2, /changes where a remote points/],
+    ['repo', 'git config alias.p push', 2, /The user edits git's config by hand/],
+    ['repo', 'git config --global url.x.insteadOf https://github.com/', 2, /The user edits git's config by hand/],
+    ['repo', 'git config user.name Someone', 0],
+    ['repo', 'git update-ref refs/remotes/origin/main %tip%', 2, /remote-tracking or replace ref/],
+    ['repo', 'git fetch origin +refs/heads/main:refs/remotes/upstream/main', 2, /belongs to another remote/],
+    ['repo', 'git fetch origin', 0],
+    ['repo', 'git replace %S1% %S2%', 2, /does not run git replace/],
+    ['repo', 'git rebase -x "make test" main', 2, /rebase --exec/],
+    ['ws', "jj config set --repo 'revset-aliases.\"trunk()\"' '@'", 2, /The user edits jj's config by hand/],
+    ['ws', 'jj config set --repo aliases.st \'["git", "push"]\'', 2, /The user edits jj's config by hand/],
+    ['ws', 'jj config set --repo user.name Someone', 0],
+    ['ws', 'jj util exec -- git push origin HEAD:main', 2, /does not run jj util/],
+    ['ws', 'jj git remote add evil /tmp/evil.git', 2, /changes where a remote points/],
+    ['ws', 'jj', 2, /bare jj runs ui.default-command/],
+    ['ws', 'jj st', 0],
+    ['ws', 'pipeline exec -- jj git push -b feature', 2, NOT_OURS],
+    ['ws', 'pipeline status', 0],
+    // Writes into the files that steer git, jj or the gate, on any line.
+    ['repo', 'echo "[alias] p = push" >> .git/config', 2, /inside a .git or .jj folder/],
+    ['repo', 'printf x | tee .jj/repo/config.toml', 2, /inside a .git or .jj folder/],
+    ['repo', 'cp /tmp/hook .git/hooks/pre-push', 2, /inside a .git or .jj folder/],
+    ['repo', 'ln -sf /dev/null .git/hooks/pre-push', 2, /inside a .git or .jj folder/],
+    ['repo', 'rm ~/.gitconfig', 2, /git or jj config file/],
+    ['repo', 'cat .git/config', 0],
+    ['repo', 'ls .jj', 0],
+    ['repo', 'x', 2, /inside a .git or .jj folder/, { tool_name: 'Edit', tool_input: { file_path: '.git/config', old_string: 'a', new_string: 'b' } }],
+    ['repo', 'x', 2, /inside a .git or .jj folder/, { tool_name: 'Write', tool_input: { file_path: '%repo%/.jj/repo/config.toml', content: 'x' } }],
+    ['repo', 'x', 2, /git or jj config file/, { tool_name: 'MultiEdit', tool_input: { file_path: '~/.jjconfig.toml', edits: [] } }],
+    ['repo', 'x', 2, /inside a .git or .jj folder/, { tool_name: 'NotebookEdit', tool_input: { notebook_path: '.git/x.ipynb' } }],
+    ['repo', 'x', 0, null, { tool_name: 'Write', tool_input: { file_path: 'src/x.mjs', content: 'x' } }],
+    ['repo', 'x', 2, /agent settings that can turn the gate off/, { tool_name: 'Write', tool_input: { file_path: '~/.claude/settings.json', content: '{"disableAllHooks": true}' } }],
+    ['repo', 'x', 2, /agent settings that can turn the gate off/, { tool_name: 'Edit', tool_input: { file_path: '.claude/settings.local.json', old_string: 'a', new_string: 'b' } }],
+    ['repo', 'x', 2, /the pipeline's own ledger/, { tool_name: 'Write', tool_input: { file_path: '%root%/state/runs/dark.json', content: '{}' } }],
+    ['repo', 'cat %root%/state/repos.json', 0],
+    // A command built at run time is refused on any line, gated or not.
+    ['repo', '$CMD status', 2, DYNAMIC],
+    ['repo', 'env $X', 2, DYNAMIC],
+    ['repo', 'eval "$X"', 2, DYNAMIC],
+    ['repo', 'sh -c "$X"', 2, DYNAMIC],
+    ['repo', 'xargs $X < list', 2, DYNAMIC],
+    ['repo', 'echo "$HOME" > out.txt', 0],
+    ['repo', 'ls "$HOME"', 0],
     ['ws', 'jj git push -b ci/fresh 2>&1 | tee push.log', 0],
     ['ws', 'jj git push -b ci/fresh --dry-run', 0],
     // P1-2, PA-02: every ref a jj push touches
@@ -132,7 +244,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['ws', "jj git push --named 'ci/z=description(substring:\"a=b\") | @-'", 0],
     ['ws', 'jj git push --named feature2=@-', 2, NOT_OURS],
     ['ws', 'jj git push -b ci/nothere', 2, /points nowhere/],
-    ['ws', 'jj --at-op @- git push -b ci/fresh', 2, /earlier operation/],
+    ['ws', 'jj --at-op @- git push -b ci/fresh', 2, /--at-op/],
     ['ws', 'jj git push -b ci/fresh --allow-new', 2, /does not know/],
     ['ws', 'jj git push -b', 2, /missing its value/],
     ['ws', "jj git push --named '=@-'", 2, /--named takes NAME=REVISION/],
@@ -154,15 +266,16 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['ws', 'jj describe -r ci/fresh -m "docs: reworded" && jj git push -b ci/fresh', 2, EARLIER],
     ['ws', 'jj b s ci/alias -r %S2% && jj git push -b ci/alias', 2, UNSCANNED],
     ['ws', 'jj b s ci/alias -r @- && jj git push -b ci/alias', 0],
-    ['ws', 'jj bookmark set ci/side -r @- -B; jj git push -b ci/side', 2, FORCE],
+    ['ws', 'jj bookmark set ci/side -r @- -B; jj git push -b ci/side', 2, SEPARATOR],
+    ['ws', 'jj bookmark set ci/side -r @- -B && jj git push -b ci/side', 2, FORCE],
     ['ws', 'jj commit -m "feat: more" && jj bookmark set ci/fresh -r @- && jj git push -b ci/fresh', 2, EARLIER],
     ['ws', 'jj bookmark rename ci/fresh ci/renamed && jj git push -b ci/renamed', 2, EARLIER],
-    ['ws', 'jj bookmark set ci/w -r @ && jj git push -b ci/w', 2, EARLIER],
+    ['ws', 'jj bookmark set ci/w -r @ && jj git push -b ci/w', 2, /working-copy commit/],
     ['ws', 'jj git push -b ci/wc', 2, /working-copy commit/],
     ['ws', 'jj new && jj git push -b ci/fresh', 2, EARLIER],
     ['ws', 'jj git fetch && jj git push -b ci/fresh', 2, EARLIER],
     ['ws', 'jj st && jj log -r @ && jj git push -b ci/fresh', 0],
-    ['ws', 'for i in 1 2; do jj git push -b ci/fresh; jj describe -r ci/fresh -m x; done', 2, /in a loop/],
+    ['ws', 'for i in 1 2; do jj git push -b ci/fresh; jj describe -r ci/fresh -m x; done', 2, SEPARATOR],
     // P1-8, PA-02: git's flags in every spelling
     ['repo', 'git push -o -n --no-verify origin +HEAD:main', 2, /pre-push hook/],
     ['repo', 'git push -o -n origin +HEAD:main', 2, FORCE],
@@ -175,8 +288,8 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'git push -vf origin ci/side', 2, FORCE],
     ['repo', 'git push origin ci/side', 2, FORCE],
     ['repo', 'git push origin tag v1', 2, /It pushes a tag/],
-    ['repo', 'echo x | xargs git push origin', 2, /xargs adds arguments/],
-    ['repo', 'git --git-dir=.git push origin %tip%:refs/heads/ci/x', 2, /another repository or program/],
+    ['repo', 'echo x | xargs git push origin', 2, PIPE],
+    ['repo', 'git --git-dir=.git push origin %tip%:refs/heads/ci/x', 2, /--git-dir/],
     ['repo', 'git push --all origin', 2, /more than the named branches/],
     ['repo', 'git push --receive-pack=x origin %tip%:refs/heads/ci/x', 2, /another program on the remote/],
     ['repo', 'git push --recurse-submodules=on-demand origin %tip%:refs/heads/ci/x', 2, /submodules/],
@@ -193,6 +306,9 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'git push origin :ci/gone', 0],
     ['repo', 'git push --dry-run origin HEAD:refs/heads/ci/x', 0],
     ['repo', 'git push origin %tip%:refs/heads/ci/x', 0],
+    { name: 'git pushes tags with every push', setup: (b) => b.sh('git config push.followTags true') },
+    ['repo', 'git push origin %tip%:refs/heads/ci/x', 2, /push\.followTags/],
+    { name: 'and no longer does', setup: (b) => b.sh('git config --unset push.followTags') },
     // PA-05, PO-9, P1-7, P2-8: pull requests, statuses and gh api writes
     ['repo', 'gh pr create --title x --body y', 2, /--draft/],
     ['repo', 'gh pr create --draft --title x', 0],
@@ -210,36 +326,76 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', "gh api graphql -f query='mutation { mergePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'", 2, /GraphQL/],
     ['repo', 'gh run rerun 5', 2, /rerun of a deploy/],
     ['repo', 'gh run rerun 9', 0],
-    ['repo', 'gh workflow run deploy.yml --ref ci/moved', 2, /last saw it/],
     ['repo', 'gh workflow run release.yml -fenvironment=production', 2, /production deploy/],
+    // PA-33, R2-7: a workflow is resolved to its file, so a display name hides nothing.
+    ['repo', 'gh workflow run Release --ref ci/dark', 2, /production deploy/],
+    ['repo', 'gh workflow run 9 --ref ci/dark', 2, /production deploy/],
+    ['repo', 'gh workflow run Twin --ref ci/dark', 2, /names 2 workflows/],
+    ['repo', 'gh workflow run nosuch.yml --ref ci/dark', 2, /No workflow/],
+    // PA-22, PA-23: pflag booleans, and --repo before the command.
+    ['repo', 'gh pr create --draft=false --title x', 2, /--draft/],
+    ['repo', 'gh pr create --draft=true --title x', 0],
+    ['repo', 'gh pr merge 7 --disable-auto=false', 2, /Merging into main is a deploy step/],
+    ['repo', 'gh workflow run deploy-prod.yml --help=false', 2, /production deploy/],
+    ['repo', `gh --repo ${SLUG} workflow run deploy-prod.yml`, 2, /production deploy/],
+    ['repo', `gh -R ${SLUG} pr merge 7`, 2, /Merging into main is a deploy step/],
+    ['repo', 'gh --hostname x pr merge 7', 2, /before the command is an option the gate does not read/],
+    ['repo', 'gh pr merge 7 --admin', 2, /--admin/],
+    ['repo', 'gh pr merge 7 --auto', 2, /Merging into main is a deploy step/],
     ['repo', `gh api repos/${SLUG}/actions/workflows/123/dispatches --input request.json`, 2, /gh workflow run 123/],
-    ['repo', 'gh workflow run deploy.yml -R "$R" --ref ci/dark', 2, /--repo is built at run time/],
-    ['repo', 'GH_REPO=$R gh run rerun 5', 2, /GH_REPO is built at run time/],
-    ['repo', 'cd "$X" && gh workflow run deploy.yml --ref ci/dark', 2, /cannot tell which repository it acts on/],
-    ['repo', 'gh "$C" run', 2, /gh command is built at run time/],
-    ['repo', 'gh dep', 2, /gh alias dep, a shell command/],
-    ['repo', 'gh a1', 2, /expand too many times/],
-    ['repo', 'echo deploy.yml | xargs gh workflow run', 2, /xargs adds arguments/],
+    ['repo', 'gh workflow run deploy.yml -R "$R" --ref ci/dark', 2, DYNAMIC],
+    ['repo', 'GH_REPO=$R gh run rerun 5', 2, /sets GH_REPO/],
+    ['repo', 'cd "$X" && gh workflow run deploy.yml --ref ci/dark', 2, DYNAMIC],
+    ['repo', 'gh "$C" run', 2, DYNAMIC],
+    ['repo', 'ACTION=run; gh workflow "$ACTION" deploy-prod.yml', 2, SEPARATOR],
+    ['repo', 'gh dep', 2, builtin('gh')],
+    ['repo', 'gh a1', 2, builtin('gh')],
+    ['repo', 'echo deploy.yml | xargs gh workflow run', 2, PIPE],
     ['repo', 'gh workflow run deploy.yml -F environment=@env.txt', 2, /read from a file/],
     ['repo', 'gh workflow run deploy.yml', 2, /Pass --ref/],
     ['repo', 'gh workflow run deploy.yml --ref ci/nobranch', 2, /is not a branch on/],
+    { name: 'ci/both is a branch and a tag on the remote', setup: (b, v) => b.sh(`jj bookmark set ci/both -r ${v.tip} && jj git push -b ci/both && jj tag set ci/both -r ${v.tip} && jj git push -t ci/both && jj tag delete ci/both`) },
     ['repo', 'gh workflow run deploy.yml --ref ci/both', 2, /names both a branch and a tag/],
     ['repo', 'gh run rerun', 2, /Name the run ID/],
     ['repo', 'gh run rerun 11', 2, /production deploy/],
-    ['repo', `gh api -X "$M" repos/${SLUG}/statuses/x`, 2, /method is built at run time/],
-    ['repo', 'gh api graphql -F query=@q.graphql', 2, /query is read from a file/],
+    ['repo', `gh api -X "$M" repos/${SLUG}/statuses/x`, 2, DYNAMIC],
+    ['repo', 'gh api graphql -F query=@q.graphql', 2, /read from a file/],
+    // PA-29, R2-4: file fields on status routes, and the other ways to merge, tag or release.
+    ['repo', `gh api repos/${SLUG}/statuses/%tip% -F context=@ctx.txt -f state=success`, 2, /set only by the tools/],
+    ['repo', `gh api repos/${SLUG}/statuses/%tip% -f context=lint -F description=@d.txt`, 2, /from a file/],
+    ['repo', "gh api graphql -f query='mutation { enqueuePullRequest(input: {pullRequestId: \"x\"}) { clientMutationId } }'", 2, /enqueuePullRequest/],
+    ['repo', "gh api graphql -f query='mutation { dequeuePullRequest(input: {id: \"x\"}) { clientMutationId } }'", 2, /dequeuePullRequest/],
+    ['repo', "gh api graphql -f query='query { viewer { login } }'", 0],
+    ['repo', 'gh api graphql --input q.json', 2, /read from a file/],
+    ['repo', 'gh api -X POST repositories/123/merges -f base=main -f head=ci/fresh', 2, /numeric id/],
+    ['repo', `gh api -X POST repos/${SLUG}/git/refs -f ref=refs/tags/v9 -f sha=%tip%`, 2, /tag on GitHub/],
+    ['repo', `gh api -X POST repos/${SLUG}/git/tags -f tag=v9 -f object=%tip%`, 2, /a tag or a release/],
+    ['repo', `gh api -X POST repos/${SLUG}/releases -f tag_name=v9`, 2, /a tag or a release/],
+    ['repo', `gh api -X POST repos/${SLUG}/actions/runs/5/deployment_protection_rule -f state=approved`, 2, /approves a pending deployment/],
+    ['repo', 'gh release create v9', 2, /does not run gh release create/],
+    ['repo', 'gh release list', 0],
+    ['repo', 'gh secret set X --body y', 2, /does not run gh secret set/],
+    ['repo', 'gh pr review 7 --approve', 2, /does not run gh pr review/],
+    ['repo', 'gh pr comment 7 --body hi', 0],
+    ['repo', 'gh pr view 7 && gh pr checks 7', 0],
+    ['repo', 'curl -s https://api.github.com/repos/x/y | jq .', 0],
+    ['repo', 'curl -X POST https://api.github.com/repos/x/y/merges -d @body.json', 2, /curl -X writes to GitHub/],
+    ['repo', "curl -H 'Authorization: token abc' https://api.github.com/repos/x/y", 2, /credential/],
+    ['repo', 'wget --method=PATCH https://api.github.com/repos/x/y', 2, /wget --method/],
     ['root', 'gh api -X POST repos/{owner}/{repo}/dispatches', 2, /placeholders need a repository/],
     ['repo', `gh api -X POST repos/${SLUG}/actions/workflows/deploy-prod.yml/dispatches -f ref=main`, 2, /production deploy/],
     ['repo', `gh api -X POST repos/${SLUG}/deployments -f ref=main`, 2, /records or starts a deployment/],
     ['repo', `gh api -X PUT repos/${SLUG}/contents/README.md -f message=x -f content=eA==`, 2, /commits on GitHub/],
     ['repo', `gh api -X POST repos/${SLUG}/pulls -f head=ci/x -f base=main -f title=x`, 2, /gh pr create --draft/],
     ['repo', `gh api -X POST repos/${SLUG}/pulls -f head=ci/x -f base=main -F draft=true`, 0],
-    ['repo', 'echo 7 | xargs gh pr merge', 2, /xargs adds arguments/],
+    ['repo', 'echo 7 | xargs gh pr merge', 2, PIPE],
     ['repo', 'gh pr create --head ci/nobranch --title x', 2, /is not a branch on/],
     ['repo', 'gh pr merge --squash', 2, /Name the pull request/],
+    ['repo', 'gh pr merge https://github.com/other-owner/other/pull/7', 2, /by its number/],
+    ['repo', 'gh pr ready ci/dark', 2, /by its number/],
     ['repo', 'agent-review start --topic dsgtopic', 2, /design note of run dsg has not passed/],
     // The deploy command
-    ['repo', 'echo b1 | xargs ./deploy.sh', 2, /xargs adds arguments/],
+    ['repo', 'echo b1 | xargs ./deploy.sh', 2, PIPE],
     ['repo', './deploy.sh b1', 2, /Argument 2 must be the revision/],
     ['repo', "./deploy.sh b1 'root() | main'", 2, /must name exactly one commit/],
     ['repo', './deploy.sh b1 nosuchrev', 2, /cannot resolve nosuchrev/],
@@ -250,9 +406,10 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['ws', 'jj git push -b feature', 2, /PowerShell/, { tool_name: 'PowerShell' }],
     ['ws', 'Get-ChildItem', 0, null, { tool_name: 'PowerShell' }],
     ['ws', 'jj git push -b feature', 2, NOT_OURS, { tool_name: 'Monitor' }],
-    // When the bookmark command fails (create of a name that exists), the push after `;` sends the bookmark where it is now.
+    // A push after `;` would run even when the bookmark command before it fails, so only && joins them.
     { name: 'a local bookmark at an unscanned commit', setup: (b, v) => b.sh(`jj bookmark set ci/side2 -r ${v.S2}`) },
-    ['repo', 'jj bookmark create ci/side2 -r %tip% ; jj git push -b ci/side2', 2, UNSCANNED],
+    ['repo', 'jj bookmark create ci/side2 -r %tip% ; jj git push -b ci/side2', 2, SEPARATOR],
+    ['repo', 'jj bookmark create ci/side2 -r %tip% && jj git push -b ci/side2', 0],
     { name: 'delete it again', setup: (b) => b.sh('jj bookmark delete ci/side2') },
     // P1-5: a local trunk moved ahead without a push changes no range
     { name: 'move main locally to the unreviewed tip', setup: (b, v) => b.sh(`jj bookmark set main -r ${v.tip}`) },
@@ -293,14 +450,17 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
 });
 
 describe('the user runs deploys and moves trunk (deploy.runBy user)', () => {
-  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user' } } });
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user', allowedWorkflows: ['.github/workflows/lint.yml'] } } });
   after(() => box.cleanup());
   const values = { repo: box.repo, root: box.root };
   box.commit('feat: on top of main', { 'x.txt': 'x\n' });
   box.ghScript([
+    workflowsRule(ALL_WORKFLOWS),
     { match: 'pr view 7 ', stdout: { baseRefName: 'main', headRefName: 'ci/x', headRefOid: 'a'.repeat(40), isDraft: false } },
-    { match: 'alias list', stdout: '' },
   ]);
+  // The deploy script exists, so the gate knows it by its path and content wherever it is run from.
+  box.write('deploy.sh', '#!/bin/sh\necho deploying "$@"\n');
+  box.sh('chmod +x deploy.sh && cp deploy.sh ../copy-of-deploy.sh');
   // The registry learns the repository from any pipeline command run in it.
   box.cli(['config', '--check']);
 
@@ -311,17 +471,23 @@ describe('the user runs deploys and moves trunk (deploy.runBy user)', () => {
     ['repo', 'bash ./deploy.sh b1 main', 2, /through bash/],
     ['repo', 'sh ./deploy.sh x abc', 2, /through sh/],
     ['repo', `gh api -X POST repos/${SLUG}/actions/workflows/4242/dispatches -f ref=main`, 2, /gh workflow run 4242/],
-    ['repo', 'echo \'{"environment":"production"}\' | gh workflow run release.yml --json', 2, /--json/],
+    ['repo', 'echo \'{"environment":"production"}\' | gh workflow run release.yml --json', 2, PIPE],
+    ['repo', 'gh workflow run release.yml --json', 2, /--json/],
     ['repo', `gh api -X POST repos/${SLUG}/dispatches -f event_type=deploy`, 2, /repository_dispatch/],
     ['repo', `gh api -X POST repos/${SLUG}/actions/runs/5/rerun`, 2, /gh run rerun/],
     ['repo', `gh api -X POST repos/${SLUG}/actions/runs/5/pending_deployments`, 2, /approves a pending deployment/],
     ['repo', 'jj bookmark set main -r @- && jj git push -b main', 2, /The user runs deploys and moves main/],
     ['repo', 'git push origin HEAD:refs/heads/main', 2, /The user runs deploys and moves main/],
     ['repo', 'gh pr merge 7', 2, /The user runs deploys and moves main/],
-    ['repo', "bash <<'EOF'\ngh workflow run deploy-prod.yml --ref main\nEOF", 2, /production deploy/],
-    ['repo', 'gh workflow run deploy.yml --ref main', 2, /The user runs deploys/],
+    ['repo', "bash <<'EOF'\ngh workflow run deploy-prod.yml --ref main\nEOF", 2, through('bash')],
+    ['repo', 'gh workflow run deploy.yml --ref main', 2, /allowedWorkflows/],
     ['repo', 'cat deploy.sh', 0],
     ['repo', 'gh workflow run lint.yml --ref main', 0],
+    // R2-12: under runBy user, only a workflow on deploy.allowedWorkflows runs, whatever its name.
+    ['repo', 'gh workflow run cd.yml --ref main', 2, /allowedWorkflows/],
+    // PA-37: the script is known by its content too, and its pattern only in its own repository.
+    ['root', '%root%/copy-of-deploy.sh b1 main', 2, /The user runs deploys/],
+    ['root', './demo/deploy.sh b1 main', 2, /The user runs deploys/],
   ]);
 });
 
@@ -354,3 +520,224 @@ describe('a deploy command without deploy.tipArg', () => {
   runRows(box, { repo: box.repo }, [['repo', './deploy.sh b1 main', 2, /Set deploy.tipArg/]]);
 });
 
+
+// Round 2: what the gate reads, and where it reads it.
+
+describe('aliases and config that would change what the gate reads (R2-1, PA-28)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  const sha = box.commit('feat: unscanned', { 'x.txt': 'x\n' });
+  box.sh('jj bookmark set ci/x -r @-');
+  box.cli(['config', '--check']);
+  const main = box.sh('jj log --no-graph -r main -T commit_id').trim();
+  const set = (key, value) => ({ name: `set ${key}`, setup: (b) => b.sh(`jj config set --repo '${key}' '${value}'`) });
+  const unset = (key) => ({ name: `unset ${key}`, setup: (b) => b.sh(`jj config unset --repo '${key}'`) });
+  const SHADOW = /redefines a name the gate's own reads use/;
+  runRows(box, { repo: box.repo }, [
+    ['repo', 'jj git push -b ci/x', 2, UNSCANNED],
+    // trunk() is never read, so pointing it anywhere changes nothing.
+    set('revset-aliases."trunk()"', sha),
+    ['repo', 'jj git push -b ci/x', 2, UNSCANNED],
+    unset('revset-aliases."trunk()"'),
+    set('revset-aliases."remote_bookmarks(a, b)"', 'root()'),
+    ['repo', 'jj git push -b ci/x', 2, SHADOW],
+    unset('revset-aliases."remote_bookmarks(a, b)"'),
+    set(`revset-aliases."${main}"`, 'root()'),
+    ['repo', 'jj git push -b ci/x', 2, SHADOW],
+    unset(`revset-aliases."${main}"`),
+    set('revset-aliases."present(x)"', 'root()'),
+    ['repo', 'jj git push -b ci/x', 2, SHADOW],
+    unset('revset-aliases."present(x)"'),
+    set('revset-aliases."coalesce(a, b)"', 'root()'),
+    ['repo', 'jj git push -b ci/x', 2, SHADOW],
+    unset('revset-aliases."coalesce(a, b)"'),
+    set('revset-aliases."bookmarks(x)"', 'root()'),
+    ['repo', 'jj git push -b ci/x', 2, SHADOW],
+    unset('revset-aliases."bookmarks(x)"'),
+    set('template-aliases.commit_id', '"0123456789012345678901234567890123456789"'),
+    ['repo', 'jj git push -b ci/x', 2, /redefines a template keyword/],
+    unset('template-aliases.commit_id'),
+    // The gate's own read of jj's config names self.source(), which this alias cannot change.
+    set('template-aliases.source', '"default"'),
+    ['repo', 'jj git push -b ci/x', 2, UNSCANNED],
+    unset('template-aliases.source'),
+    // A plain alias that shadows nothing is fine.
+    set('revset-aliases.mine', 'author("x")'),
+    ['repo', 'jj git push -b ci/x', 2, UNSCANNED],
+    unset('revset-aliases.mine'),
+    set('aliases.st', '["git", "push", "-b", "ci/x"]'),
+    ['repo', 'jj st', 2, /jj st is redefined/],
+    ['repo', 'jj status', 0],
+    unset('aliases.st'),
+    ['repo', 'jj st', 0],
+    set('ui.default-command', '["git", "push"]'),
+    ['repo', 'jj git push -b ci/x', 2, /ui\.default-command/],
+    unset('ui.default-command'),
+    { name: 'a local git setting that rewrites URLs', setup: (b) => b.sh('git config url./tmp/evil.git.insteadOf https://github.com/') },
+    ['repo', 'jj git push -b ci/x', 2, /url\.\/tmp\/evil\.git\.insteadof/],
+    { name: 'remove it', setup: (b) => b.sh('git config --unset url./tmp/evil.git.insteadOf') },
+    { name: 'a husky hooks path and a git alias', setup: (b) => b.sh('git config core.hooksPath .husky && git config alias.co checkout') },
+    ['repo', 'jj git push -b ci/x', 2, UNSCANNED],
+    // PA-28: a registered repository whose policy leaves trunk fails closed.
+    { name: 'trunk loses its config', setup: (b) => b.sh('jj new main && rm pipeline.config.json && jj commit -m "chore: drop the pipeline" && jj bookmark set main -r @- && jj git push -b main') },
+    ['repo', 'jj git push -b ci/x', 2, /registered with the pipeline, but pipeline\.config\.json is not committed on origin\/main/],
+    ['repo', 'jj log', 0],
+  ]);
+});
+
+describe('the remote itself, not local refs (R2-2)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  const sha = box.commit('feat: unscanned', { 'x.txt': 'x\n' });
+  box.sh('jj bookmark set ci/x -r @-');
+  box.cli(['config', '--check']);
+  const FETCH = /differs from what origin holds\. Run jj git fetch/;
+  runRows(box, { repo: box.repo, sha }, [
+    ['repo', 'jj git push -b ci/x', 2, UNSCANNED],
+    // probe18: a forged origin/main would move every range base.
+    { name: 'forge origin/main', setup: (b, v) => b.sh(`git update-ref refs/remotes/origin/main ${v.sha} && jj st >/dev/null`) },
+    ['repo', 'jj git push -b ci/x', 2, FETCH],
+    ['repo', 'gh pr merge 7', 2, FETCH],
+    { name: 'fetch it back', setup: (b) => b.sh('jj git fetch && jj bookmark set main -r main@origin') },
+    ['repo', 'jj git push -b ci/x', 2, UNSCANNED],
+    // probe19: a forged remote branch would hide the commit from the published set.
+    { name: 'forge a remote branch', setup: (b, v) => b.sh(`git update-ref refs/remotes/origin/ci/fake ${v.sha} && jj st >/dev/null`) },
+    ['repo', 'jj git push -b ci/x', 2, FETCH],
+    { name: 'drop it', setup: (b) => b.sh('git update-ref -d refs/remotes/origin/ci/fake && jj git fetch') },
+    // A branch pushed by someone else makes the local view stale.
+    { name: 'someone else pushes a branch', setup: (b) => b.sh(`git push -q ${JSON.stringify(b.bare)} main@{0}:refs/heads/ci/theirs 2>/dev/null || git push -q ${JSON.stringify(b.bare)} $(jj log --no-graph -r main -T commit_id):refs/heads/ci/theirs`) },
+    ['repo', 'jj git push -b ci/x', 2, FETCH],
+    { name: 'fetch', setup: (b) => b.sh('jj git fetch') },
+    ['repo', 'jj git push -b ci/x', 2, UNSCANNED],
+  ]);
+});
+
+describe('where a push really goes (R2-11c)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  box.commit('feat: unscanned', { 'x.txt': 'x\n' });
+  box.sh(`jj bookmark set ci/x -r @- && git init -q --bare ${JSON.stringify(join(box.root, 'other.git'))}`);
+  box.cli(['config', '--check']);
+  const OTHER = /would go to .*other\.git, not to/;
+  runRows(box, { repo: box.repo, root: box.root }, [
+    ['repo', 'jj git push -b ci/x', 2, UNSCANNED],
+    { name: 'a pushurl to another repository', setup: (b) => b.sh(`git config remote.origin.pushurl ${JSON.stringify(join(b.root, 'other.git'))}`) },
+    ['repo', 'jj git push -b ci/x', 2, OTHER],
+    ['repo', 'git push origin ci/x:refs/heads/ci/x', 2, OTHER],
+    { name: 'remove it', setup: (b) => b.sh('git config --unset remote.origin.pushurl') },
+    { name: 'a pushInsteadOf in the user config', setup: (b) => b.sh(`git config --global url.${JSON.stringify(join(b.root, 'other.git'))}.pushInsteadOf https://github.com/${SLUG}.git`) },
+    ['repo', 'jj git push -b ci/x', 2, OTHER],
+    { name: 'remove that too', setup: (b) => b.sh(`git config --global --remove-section url.${JSON.stringify(join(b.root, 'other.git'))}`) },
+    ['repo', 'jj git push -b ci/x', 2, UNSCANNED],
+  ]);
+
+  test('the pre-push hook checks the URL git pushes to', () => {
+    const result = box.cli(['git-pre-push', '--remote', 'origin', '--url', join(box.root, 'other.git')], { input: '' });
+    assert.equal(result.code, 1);
+    assert.match(result.err, /git is pushing to .*other\.git, not to/);
+    assert.equal(box.cli(['git-pre-push', '--remote', 'origin', '--url', box.bare], { input: '' }).code, 0);
+  });
+});
+
+describe('a registry that cannot be read (R2-11d)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  box.cli(['config', '--check']);
+  runRows(box, { repo: box.repo }, [
+    { name: 'corrupt repos.json', setup: (b) => b.write('repos.json', '{ nope', join(b.root, 'state')) },
+    ['repo', 'ls', 0],
+    ['repo', 'rm -f notes.txt', 0],
+    ['repo', 'jj git push -b ci/x', 2, /repos\.json is not valid JSON.*outside the agent/],
+    ['repo', './deploy.sh b1 main', 2, /repos\.json is not valid JSON/],
+  ]);
+});
+
+describe('deploy scripts belong to their own repository (PA-37, R2-11e)', () => {
+  const script = '#!/bin/sh\necho deploying "$@"\n';
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user', match: 'release\\.sh' } } });
+  after(() => box.cleanup());
+  box.write('scripts/release.sh', script, box.root);
+  box.write('elsewhere/copy.sh', script, box.root);
+  box.write('pipeline.local.json', JSON.stringify({ deploy: { command: `${join(box.root, 'scripts', 'release.sh')} {name} {tip}` } }));
+  box.sh(`chmod +x ${join(box.root, 'scripts', 'release.sh')} ${join(box.root, 'elsewhere', 'copy.sh')}`);
+  box.cli(['config', '--check']);
+  // Another repository with a script of the same name, and none of this one's rules.
+  const other = join(box.root, 'other');
+  box.write('release.sh', '#!/bin/sh\necho other\n', other);
+  box.sh('jj git init --colocate >/dev/null 2>&1 && chmod +x release.sh', other);
+  const USER = /The user runs deploys/;
+  runRows(box, { repo: box.repo, root: box.root, other }, [
+    ['root', '%root%/scripts/release.sh b1 main', 2, USER],
+    ['root', 'cd %root%/scripts && ./release.sh b1 main', 2, USER],
+    ['root', '%root%/elsewhere/copy.sh b1 main', 2, USER],
+    ['root', `sh %root%/scripts/release.sh b1 main`, 2, /through sh/],
+    ['other', './release.sh b1 main', 0],
+    ['root', 'cat %root%/scripts/release.sh', 0],
+    ['root', 'timeout 600 %root%/scripts/release.sh b1 main', 2, USER],
+    ['root', 'env FOO=1 %root%/scripts/release.sh b1 main', 2, /names the deploy script through env/],
+    ['root', 'source %root%/scripts/release.sh b1 main', 2, /names the deploy script through source/],
+    ['root', 'nohup %root%/elsewhere/copy.sh b1 main', 2, /names the deploy script through nohup/],
+    // Pointing deploy.command elsewhere in the gitignored file does not free the old script.
+    { name: 'deploy.command moves', setup: (b) => { b.write('pipeline.local.json', JSON.stringify({ deploy: { command: './x.sh {name} {tip}' } })); b.cli(['config', '--check']); } },
+    ['root', '%root%/scripts/release.sh b1 main', 2, USER],
+    // A script two repositories both name is refused, whichever entry comes first.
+    { name: 'a second repository names the same script', setup: (b) => {
+      const path = join(b.root, 'state', 'repos.json');
+      const all = JSON.parse(readFileSync(path, 'utf8'));
+      const [entry] = Object.values(all.repos);
+      all.repos['github:someone/else'] = { ...entry, identity: 'github:someone/else', slug: 'someone/else', store: '/nowhere', path: '/nowhere' };
+      writeFileSync(path, JSON.stringify(all));
+    } },
+    ['root', '%root%/scripts/release.sh b1 main', 2, /deploy script of more than one repository/],
+  ]);
+});
+
+describe('a pushed bookmark on the working copy (PA-25)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  box.sh('echo w > w.txt && jj describe -m "feat: w" && jj bookmark set ci/w -r @ && jj git push --bookmark ci/w');
+  box.write('w.txt', 'edited on disk, never seen\n');
+  runRows(box, { repo: box.repo }, [['repo', 'jj git push --bookmark ci/w', 2, /working-copy commit/]]);
+});
+
+describe('tracked tags (PA-34)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  const next = box.commit('feat: next', { 'n.txt': 'n\n' });
+  box.sh(`jj tag set v1 -r main && jj git push -t v1 && jj tag set v1 -r ${next} --allow-move`);
+  runRows(box, { repo: box.repo }, [['repo', 'jj git push --tracked', 2, /also pushes tracked tags/]]);
+});
+
+describe('Codex argument lists', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  box.commit('feat: unscanned', { 'x.txt': 'x\n' });
+  box.sh('jj bookmark set ci/x -r @- && jj bookmark set feature -r @-');
+  runRows(box, { repo: box.repo }, [
+    ['repo', 'x', 2, NOT_OURS, { tool_input: { command: ['bash', '-lc', 'jj git push -b feature'] } }],
+    ['repo', 'x', 2, NOT_OURS, { tool_input: { command: ['jj', 'git', 'push', '-b', 'feature'] } }],
+    ['repo', 'x', 2, through('bash'), { tool_input: { command: ['bash', '-c', 'jj git push -b ci/x', 'extra'] } }],
+    ['repo', 'x', 0, null, { tool_input: { command: ['ls', '-la'] } }],
+  ]);
+});
+
+describe('the gate answers before the hook times out (PA-35)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  box.cli(['config', '--check']);
+
+  test('a slow GitHub refuses at the deadline instead of letting the command run', () => {
+    box.ghScript([{ match: 'pr view 7', sleepMs: 8000, stdout: {} }]);
+    const started = Date.now();
+    const result = box.cli(['gate'], { input: JSON.stringify({ tool_input: { command: 'gh pr merge 7' }, cwd: box.repo }), extra: { PIPELINE_GATE_DEADLINE_MS: '1500' } });
+    assert.equal(result.code, 2);
+    assert.match(result.err, /ran out of time/);
+    assert.ok(Date.now() - started < 6000, `took ${Date.now() - started} ms`);
+  });
+
+  test('the Claude hooks block when the hook itself fails or times out', () => {
+    const hooks = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'hooks', 'hooks.json'), 'utf8')).hooks;
+    for (const event of ['PreToolUse', 'PostToolUse']) assert.equal(hooks[event][0].hooks[0].onFailure, 'block');
+    assert.match(hooks.PreToolUse[0].matcher, /Edit\|Write\|MultiEdit\|NotebookEdit/);
+  });
+});

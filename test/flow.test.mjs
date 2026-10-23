@@ -3,10 +3,10 @@
 import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { baseConfig, builtRun, ciScript, CLI, sandbox, SLUG, WORDS, WORKFLOWS, workflowsRule } from './helpers.mjs';
+import { ALL_WORKFLOWS, baseConfig, builtRun, ciScript, CLI, sandbox, SLUG, WORDS, WORKFLOWS, workflowsRule } from './helpers.mjs';
 
 describe('intake, briefs and design', () => {
   const box = sandbox({ config: { ...baseConfig, brief: { preamble: 'agent-preamble.md' }, design: { requiredSections: ['Tests'] }, review: { provider: 'agent-review' } } });
@@ -215,7 +215,7 @@ describe('scan, push, CI, review and deploy', () => {
     assert.match(box.gate('git push origin +ci/dark', ws).err, /force push/);
     assert.match(box.gate('git push --no-verify origin ci/dark', ws).err, /skips the pre-push hook/);
     assert.match(box.gate('jj git push --remote fork --bookmark ci/dark', ws).err, /pushes to fork/);
-    assert.match(box.gate(`cd "$SOMEWHERE" && jj git push --bookmark ci/dark`, ws).err, /Could not tell which directory/);
+    assert.match(box.gate(`cd "$SOMEWHERE" && jj git push --bookmark ci/dark`, ws).err, /built at run time/);
     assert.equal(box.gate('echo "jj git push is documented here" > notes.txt', ws).code, 0);
     assert.equal(box.gate('jj git push --bookmark ci/dark --dry-run', ws).code, 0);
   });
@@ -401,15 +401,16 @@ describe('a rebase that changes the lane tip\'s diff', () => {
 });
 
 describe('the user runs deploys, and prod is never an agent\'s', () => {
-  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user' } } });
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user', allowedWorkflows: ['.github/workflows/lint.yml'] } } });
   after(() => box.cleanup());
 
   test('the deploy command and deploy workflows are refused, and the check hands over the command', () => {
+    box.ghScript([workflowsRule(ALL_WORKFLOWS)]);
     assert.match(box.gate('./deploy.sh b1 main').err, /The user runs deploys/);
-    assert.match(box.gate('gh workflow run deploy.yml --ref main').err, /The user runs deploys/);
+    assert.match(box.gate('gh workflow run deploy.yml --ref main').err, /allowedWorkflows/);
     assert.match(box.gate('gh workflow run deploy-prod.yml --ref main').err, /never run a production deploy/);
     assert.match(box.gate('gh workflow run release.yml -f environment=production').err, /never run a production deploy/);
-    assert.match(box.gate('gh workflow run 12345').err, /Name the workflow by its file name/);
+    assert.match(box.gate('gh workflow run 12345').err, /No workflow/);
     assert.equal(box.gate('gh workflow run lint.yml --ref main').code, 0);
   });
 });
@@ -729,7 +730,9 @@ describe('a build recorded while the lane moves', () => {
     Object.assign(run.lanes.a, { tip: later });
     run.tip = later;
     writeFileSync(runFile, JSON.stringify(run));
-    rmSync(`${runFile}.lock`, { recursive: true });
+    // Moved aside first, so the waiting build's own lock taking its place is never removed with it.
+    renameSync(`${runFile}.lock`, `${runFile}.released`);
+    rmSync(`${runFile}.released`, { recursive: true });
     assert.equal(await exited, 1, out);
     assert.match(out, /Build for dark: in-progress/);
     assert.equal(box.run('dark').stages.build.state, 'in-progress');
@@ -781,5 +784,33 @@ describe('a live-hole run whose fix is amended', () => {
     assert.ok(!box.run('dark').lanes.a.commits.some((commit) => commit.id === fix));
     box.cli(['scan', '--run', 'dark', '--tip', fix], { cwd: ws });
     assert.match(box.gate(`jj git push --named ci/old=${fix}`, ws).err, /fixes a hole that is live on the deployed server/);
+  });
+});
+
+describe('pipeline doctor', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  const repoRule = (admin) => ({ match: `api repos/${SLUG}`, stdout: { default_branch: 'main', permissions: { admin, push: true } } });
+  const rulesets = [
+    { match: 'rulesets/1', stdout: { id: 1, name: 'trunk', target: 'branch', enforcement: 'active', current_user_can_bypass: 'never', conditions: { ref_name: { include: ['~DEFAULT_BRANCH'], exclude: [] } }, rules: [{ type: 'pull_request' }, { type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'pipeline/review', integration_id: 1234 }] } }, { type: 'non_fast_forward' }, { type: 'deletion' }] } },
+    { match: 'rulesets/2', stdout: { id: 2, name: 'all branches', target: 'branch', enforcement: 'active', current_user_can_bypass: 'never', conditions: { ref_name: { include: ['~ALL'], exclude: [] } }, rules: [{ type: 'non_fast_forward' }, { type: 'deletion' }] } },
+    { match: 'rulesets/3', stdout: { id: 3, name: 'tags', target: 'tag', enforcement: 'active', current_user_can_bypass: 'never', conditions: { ref_name: { include: ['~ALL'], exclude: [] } }, rules: [{ type: 'creation' }, { type: 'update' }, { type: 'deletion' }] } },
+    { match: 'rulesets?', stdout: [{ id: 1 }, { id: 2 }, { id: 3 }] },
+  ];
+  const environments = { match: 'environments?', stdout: { environments: [{ name: 'production', protection_rules: [{ type: 'required_reviewers', reviewers: [{ type: 'User' }] }] }] } };
+
+  test('reports every backstop as present when GitHub enforces it', () => {
+    box.ghScript([...rulesets, environments, repoRule(false)]);
+    const result = box.cli(['doctor']);
+    assert.equal(result.code, 0, result.all);
+    assert.match(result.out, /All present/);
+    assert.ok(!box.ghCalls().some((args) => args.includes('-X') || args.includes('--method')), 'doctor only reads');
+  });
+
+  test('names each missing backstop and how to add it', () => {
+    box.ghScript([{ match: 'rulesets?', stdout: [] }, { match: 'environments?', stdout: { environments: [] } }, repoRule(true)]);
+    const result = box.cli(['doctor']);
+    assert.equal(result.code, 1);
+    for (const missing of [/missing main requires a pull request/, /missing no branch can be force pushed/, /missing tags \(and so releases\)/, /missing the token in use is not a repository admin/, /missing a production environment/]) assert.match(result.out, missing);
   });
 });

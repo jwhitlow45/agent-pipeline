@@ -25,6 +25,8 @@ if (rule.times !== undefined) {
   rule.times--;
   writeFileSync(scriptFile, JSON.stringify(script));
 }
+// A rule with sleepMs answers late, as a slow GitHub would.
+if (rule.sleepMs) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, rule.sleepMs);
 if (rule.stderr) process.stderr.write(rule.stderr);
 process.stdout.write(typeof rule.stdout === 'string' ? rule.stdout : JSON.stringify(rule.stdout ?? {}));
 process.exit(rule.exit ?? 0);

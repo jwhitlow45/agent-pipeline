@@ -2,8 +2,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { docsRuleGaps, parseBugTable } from '../lib/after.mjs';
 import { commitProblems, needsMutation } from '../lib/build.mjs';
@@ -17,6 +16,7 @@ import { coverage, reviewPassed } from '../lib/review.mjs';
 import { globToRegExp, matchesAny } from '../lib/util.mjs';
 import { deployCheckProblems } from '../lib/ship.mjs';
 import { stageFor } from '../lib/mirror.mjs';
+import { tempDir } from './helpers.mjs';
 
 const EM = '\u2014';
 const config = (overrides = {}) => structuredClone({ ...DEFAULTS, ...overrides });
@@ -56,7 +56,7 @@ test('check gaps name what has not run, what failed, and a phase that ran before
 });
 
 test('an e2e file whose beforeEach fails or runs out of time fails without running', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pipeline-checks-'));
+  const dir = tempDir('pipeline-checks-');
   const ran = join(dir, 'ran.txt');
   const e2e = (beforeEach) => ({ ...DEFAULTS.checks.e2e, command: `echo {file} >> ${ran}; echo "# pass 1"`, files: ['a', 'b'], beforeEach, beforeEachTimeoutSec: 1 });
   const cfg = config({ checks: { ...DEFAULTS.checks, keepAwake: false, stopOnFailure: false, e2e: e2e('test {file} = b || exit 3') } });
@@ -73,7 +73,7 @@ test('an e2e file whose beforeEach fails or runs out of time fails without runni
 });
 
 test('runChecks runs the parallel phase side by side, logs each check, and stops after a failed phase', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'pipeline-checks-'));
+  const dir = tempDir('pipeline-checks-');
   const marker = join(dir, 'order.txt');
   const cfg = config({ checks: { ...DEFAULTS.checks, keepAwake: false } });
   const steps = [
@@ -127,7 +127,7 @@ test('a brief names decisions on lines that say decided, and on a Decisions line
 });
 
 test('a decision is logged with what was chosen, why and what was rejected, and its ID is then found', () => {
-  const file = join(mkdtempSync(join(tmpdir(), 'pipeline-decisions-')), 'decisions.md');
+  const file = join(tempDir('pipeline-decisions-'), 'decisions.md');
   const cfg = config({ decisions: { ...DEFAULTS.decisions, file } });
   assert.throws(() => appendDecision({ id: 'RS-O-1', chose: 'a', why: 'b' }, cfg), /--rejected is required/);
   assert.throws(() => appendDecision({ id: 'RS-O-1', chose: `a ${EM} b`, why: 'b', rejected: 'c' }, cfg), /em dash/);
@@ -209,13 +209,13 @@ test('deploy checks: backup, health, a full load check and HTTP answers', () => 
 });
 
 test('the decision log file is plain markdown the user can read', () => {
-  const file = join(mkdtempSync(join(tmpdir(), 'pipeline-decisions-')), 'log.md');
+  const file = join(tempDir('pipeline-decisions-'), 'log.md');
   writeFileSync(file, '- 2026-10-22 (coordinator, LP12-AT-3): a press in the middle starts on the holder.\n');
   assert.deepEqual(missingDecisions(['LP12-AT-3'], config({ decisions: { ...DEFAULTS.decisions, file } })), []);
 });
 
 test('a decision is logged only by an entry that starts with its ID, never by a mention in the text', () => {
-  const file = join(mkdtempSync(join(tmpdir(), 'pipeline-decisions-')), 'log.md');
+  const file = join(tempDir('pipeline-decisions-'), 'log.md');
   writeFileSync(file, [
     '## 2026-10-22: RS-O-1, keeps RS-O-9 in mind (run dark)',
     '- Chosen: per device, as in RS-O-2.',
@@ -234,10 +234,11 @@ test('a decision is logged only by an entry that starts with its ID, never by a 
   assert.deepEqual(missingDecisions(['RS-O-2'], cfg), []);
 });
 
-test('the plugin hooks cover every Claude Code tool that runs a command, and the marketplace describes itself', () => {
+test('the plugin hooks cover every Claude Code tool that runs a command or edits a file, and the marketplace describes itself', () => {
   const read = (path) => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'));
   const { hooks } = read('hooks/hooks.json');
-  for (const event of ['PreToolUse', 'PostToolUse']) assert.deepEqual(hooks[event].map((entry) => entry.matcher.split('|').sort()), [['Bash', 'Monitor', 'PowerShell']]);
+  assert.deepEqual(hooks.PreToolUse.map((entry) => entry.matcher.split('|').sort()), [['Bash', 'Edit', 'Monitor', 'MultiEdit', 'NotebookEdit', 'PowerShell', 'Write']]);
+  assert.deepEqual(hooks.PostToolUse.map((entry) => entry.matcher.split('|').sort()), [['Bash', 'Monitor', 'PowerShell']]);
   assert.ok(read('.claude-plugin/marketplace.json').description);
 });
 
