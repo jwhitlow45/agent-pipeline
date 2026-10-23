@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { guardOf, lockStep, withLock } from '../lib/lock.mjs';
+import { DeadlineError, setDeadline } from '../lib/util.mjs';
 import { tempDir } from './helpers.mjs';
 
 const LIB = new URL('../lib/', import.meta.url).pathname;
@@ -27,6 +28,29 @@ test('a lock a live process holds is waited on, then refused', () => {
   hold(`${path}.lock`, { token: 'live', pid: process.pid });
   assert.throws(() => withLock(path, () => 'ran', { waitMs: 200 }), /is locked by another process/);
   assert.equal(JSON.parse(readFileSync(join(`${path}.lock`, 'owner.json'), 'utf8')).token, 'live');
+});
+
+// PA-47: an owner file that does not parse once spun without waiting, past every timeout.
+test('a lock whose owner file does not parse fails at once, naming the lock', () => {
+  const path = join(fresh(), 'state.json');
+  mkdirSync(`${path}.lock`);
+  writeFileSync(join(`${path}.lock`, 'owner.json'), '{ not json');
+  const started = Date.now();
+  assert.throws(() => withLock(path, () => 'ran', { waitMs: 60_000 }), /holds an owner file that is not a lock owner.*remove .*state\.json\.lock by hand/s);
+  assert.ok(Date.now() - started < 5000);
+});
+
+test('a hook deadline bounds the wait for a lock', () => {
+  const path = join(fresh(), 'state.json');
+  hold(`${path}.lock`, { token: 'live', pid: process.pid });
+  setDeadline(150);
+  try {
+    const started = Date.now();
+    assert.throws(() => withLock(path, () => 'ran', { waitMs: 60_000 }), (error) => error instanceof DeadlineError && /waiting for .*state\.json\.lock/.test(error.message));
+    assert.ok(Date.now() - started < 5000);
+  } finally {
+    setDeadline(null);
+  }
 });
 
 // The model checker: three writers run lockStep over an in-memory file system, in every order, and
