@@ -61,6 +61,10 @@ describe('intake, briefs and design', () => {
     assert.match(blocked.err, /does not quote the user's words/);
     writeFileSync(join(folder, 'round-1', 'request.md'), `## The user's words\n${WORDS}\n`);
     assert.equal(box.gate('agent-review ask --topic darkdesign --to darkdesign-model --from me').code, 0);
+    // R4 sweep: a ledger entry that cannot be read may be the one this review needs.
+    writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, 'broken.json'), '{ nope');
+    assert.match(box.gate('agent-review ask --topic darkdesign --to darkdesign-model --from me').err, /review ledger entry \S+broken\.json cannot be read/);
+    rmSync(join(box.env.AGENT_REVIEW_LEDGER, 'broken.json'));
   });
 
   test('design passes once agent-review records consensus, and a note changed after it is refused', () => {
@@ -89,7 +93,7 @@ describe('intake, briefs and design', () => {
 describe('a design bound to a skip', () => {
   const box = sandbox({ config: baseConfig });
   after(() => box.cleanup());
-  const consensus = (topic, rounds) => writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, `${topic}.json`), JSON.stringify({ topic, repo: null, identity: null, folder: join(box.root, `review-${topic}`), status: 'consensus', rounds: Array.from({ length: rounds }, (_, n) => ({ n: n + 1 })), consensus: { tip: null, commits: [], reviewers: 'a, b', rounds } }));
+  const consensus = (topic, rounds, at = '2099-01-01T00:00:00Z') => writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, `${topic}.json`), JSON.stringify({ topic, repo: null, identity: null, folder: join(box.root, `review-${topic}`), status: 'consensus', rounds: Array.from({ length: rounds }, (_, n) => ({ n: n + 1 })), consensus: { tip: null, commits: [], reviewers: 'a, b', rounds, at } }));
 
   test('takes a consensus of the run\'s own design review for the changed note, and no other topic\'s', () => {
     mkdirSync(box.env.AGENT_REVIEW_LEDGER, { recursive: true });
@@ -106,6 +110,33 @@ describe('a design bound to a skip', () => {
     const reviewed = box.cli(['design', '--run', 'skp', '--note', 'docs/design-skp.md', '--re-review']);
     assert.equal(reviewed.code, 0, reviewed.all);
     assert.deepEqual([box.run('skp').stages.design.reviewed.kind, box.run('skp').stages.design.reviewed.topic], ['review', 'skpdesign']);
+  });
+
+  // PA-62: a consensus recorded while the skipped note is unchanged binds it, so it cannot approve a
+  // later edit. A consensus with no time cannot prove it came after the skip.
+  test('binds a review of the unchanged skipped note, so an edit needs a newer one', () => {
+    box.cli(['intake', '--run', 'skp2', '--words', WORDS, '--ui']);
+    box.write('docs/design-skp2.md', '# Skip\n## Rules\n## UI and UX\n## Build plan\n## Tests\n');
+    assert.equal(box.cli(['design', '--run', 'skp2', '--note', 'docs/design-skp2.md', '--review-topic', 'skp2design']).code, 0);
+    assert.equal(box.cli(['design', '--run', 'skp2', '--note', 'docs/design-skp2.md', '--review-skip', 'The user said to skip it.']).code, 0);
+    consensus('skp2design', 2);
+    const bound = box.cli(['design', '--run', 'skp2', '--note', 'docs/design-skp2.md']);
+    assert.equal(bound.code, 0, bound.all);
+    assert.deepEqual([box.run('skp2').stages.design.reviewed.kind, box.run('skp2').stages.design.reviewed.rounds], ['review', 2]);
+    box.write('docs/design-skp2.md', '# Skip\n## Rules\n## UI and UX\n## Build plan\n## Tests\nAn edit after the review.\n');
+    assert.match(box.cli(['design', '--run', 'skp2', '--note', 'docs/design-skp2.md', '--re-review']).out, /needs a consensus newer than the one the note was bound to \(round 2 of skp2design\)/);
+    consensus('skp2design', 3, '2099-01-02T00:00:00Z');
+    assert.equal(box.cli(['design', '--run', 'skp2', '--note', 'docs/design-skp2.md', '--re-review']).code, 0);
+  });
+
+  test('refuses a consensus with no time to take over from a skip', () => {
+    box.cli(['intake', '--run', 'skp3', '--words', WORDS, '--ui']);
+    box.write('docs/design-skp3.md', '# Skip\n## Rules\n## UI and UX\n## Build plan\n## Tests\n');
+    box.cli(['design', '--run', 'skp3', '--note', 'docs/design-skp3.md', '--review-topic', 'skp3design']);
+    box.cli(['design', '--run', 'skp3', '--note', 'docs/design-skp3.md', '--review-skip', 'The user said to skip it.']);
+    box.write('docs/design-skp3.md', '# Skip\n## Rules\n## UI and UX\n## Build plan\n## Tests\nAn edit.\n');
+    consensus('skp3design', 2, null);
+    assert.match(box.cli(['design', '--run', 'skp3', '--note', 'docs/design-skp3.md', '--re-review']).out, /recorded after the skip, and this one has no time recorded/);
   });
 });
 
@@ -196,6 +227,14 @@ describe('build lanes', () => {
     assert.equal(result.code, 64);
     assert.match(result.err, /still passes with the fix in src\/a.mjs removed/);
     assert.match(box.cli(['build', '--run', 'one']).out, /has no mutation check/);
+  });
+
+  // R4 sweep: a run without the fix that is killed or times out shows nothing about the test.
+  test('a mutation check refuses a run without the fix that never finished', () => {
+    const tip = box.run('one').lanes.a.tip;
+    const result = box.cli(['mutation', '--run', 'one', '--lane', 'a', '--commit', tip, '--test', 'src/a.test.mjs', '--cmd', 'grep -q true src/a.mjs || kill -9 $$'], { cwd: ws });
+    assert.equal(result.code, 64);
+    assert.match(result.err, /did not finish without the fix \(signal SIGKILL\)/);
   });
 
   test('a file another open lane owns is a conflict, a new file included', () => {
@@ -363,6 +402,18 @@ describe('scan, push, CI, review and deploy', () => {
     const done = box.cli(['cleanup', '--run', 'dark']);
     assert.equal(done.code, 0, done.all);
     assert.equal(box.run('dark').lanesReleased, true);
+    // R4 sweep: a database list that fails cannot show the scratch databases were dropped.
+    const runFile = join(box.env.AGENT_PIPELINE_STATE, 'runs', 'dark.json');
+    const saved = JSON.parse(readFileSync(runFile, 'utf8'));
+    saved.lanes.a.dbs = ['scratch_a'];
+    writeFileSync(runFile, JSON.stringify(saved));
+    box.write('pipeline.local.json', JSON.stringify({ cleanup: { databaseList: 'echo scratch_a; exit 3' } }));
+    const unlisted = box.cli(['cleanup', '--run', 'dark']);
+    assert.equal(unlisted.code, 1);
+    assert.match(unlisted.out, /cleanup\.databaseList failed \(exit 3\)/);
+    box.write('pipeline.local.json', JSON.stringify({ cleanup: { databaseList: 'echo other_db' } }));
+    assert.equal(box.cli(['cleanup', '--run', 'dark']).code, 0);
+    box.sh('rm pipeline.local.json');
   });
 });
 
@@ -883,6 +934,28 @@ describe('pipeline doctor', () => {
     const result = box.cli(['doctor']);
     assert.equal(result.code, 1);
     assert.match(result.out, /missing +the production environment requires a reviewer\. Add the user as a required reviewer on production/);
+  });
+
+  // PA-61: a hook that holds the right words but never runs the pipeline, or is not executable.
+  test('accepts only the executable hook install.sh links', () => {
+    box.ghScript([...complete, environments(true), repoRule(false)]);
+    box.sh("rm -f .git/hooks/pre-push && printf '#!/bin/sh\\n# pipeline git-pre-push\\nexit 0\\n' > .git/hooks/pre-push && chmod +x .git/hooks/pre-push");
+    assert.match(box.cli(['doctor']).out, /unverified \S+ runs the pipeline's pre-push hook\. \S+pre-push is not the hook install\.sh links/);
+    box.sh('chmod -x .git/hooks/pre-push');
+    assert.match(box.cli(['doctor']).out, /missing +\S+ runs the pipeline's pre-push hook\. \S+pre-push is not executable, so git skips it/);
+    box.sh(`rm -f .git/hooks/pre-push && ln -s ${JSON.stringify(hook)} .git/hooks/pre-push`);
+    assert.match(box.cli(['doctor']).out, /ok +\S+ runs the pipeline's pre-push hook/);
+  });
+
+  // R4 sweep: a ruleset doctor cannot read may be one the token bypasses, and a missing permission is unknown.
+  test('says the token cannot bypass and is no admin only from answers it read', () => {
+    const listed = complete.filter((rule) => rule.match !== 'rulesets?');
+    box.ghScript([...listed, { match: 'rulesets/9', exit: 1, stderr: 'gh: Not Found (HTTP 404)' }, { match: 'rulesets?', stdout: [{ id: 1 }, { id: 2 }, { id: 3 }, { id: 9, name: 'hidden' }] }, environments(true), { match: `api repos/${SLUG}`, stdout: { default_branch: 'main' } }]);
+    const result = box.cli(['doctor']);
+    assert.match(result.out, /unverified +doctor could read every ruleset \(hidden could not be read\)/);
+    assert.match(result.out, /unverified +the token in use cannot bypass any ruleset/);
+    assert.match(result.out, /unverified +the token in use is not a repository admin/);
+    assert.doesNotMatch(result.out, /ok +the token in use/);
   });
 
   test('names each missing backstop and how to add it, the pre-push hook included', () => {

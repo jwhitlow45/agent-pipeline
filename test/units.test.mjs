@@ -16,6 +16,7 @@ import { coverage, reviewPassed } from '../lib/review.mjs';
 import { globToRegExp, matchesAny } from '../lib/util.mjs';
 import { deployCheckProblems } from '../lib/ship.mjs';
 import { stageFor } from '../lib/mirror.mjs';
+import { deployScriptEntries, scriptOf } from '../lib/registry.mjs';
 import { tempDir } from './helpers.mjs';
 
 const EM = '\u2014';
@@ -198,6 +199,8 @@ test('CI settles only when the run and every job have completed', () => {
   assert.deepEqual([done.settled, done.ok], [true, true]);
   const failed = settle({ status: 'completed', conclusion: 'failure', jobs: [{ name: 'e2e (3)', status: 'completed', conclusion: 'failure' }] }, ok);
   assert.deepEqual([failed.ok, failed.failedJobs], [false, ['e2e (3)']]);
+  // R4 sweep: a run view without its jobs cannot show every job passed.
+  assert.throws(() => settle({ status: 'completed', conclusion: 'success' }, ok), /lists no jobs/);
 });
 
 test('deploy checks: backup, health, a full load check and HTTP answers', () => {
@@ -257,7 +260,7 @@ test('the example deploy keeps failures through its pipes and checks the contain
   const script = readFileSync(join(import.meta.dirname, '..', 'profiles', 'raccoon-vtt', 'deploy.example.sh'), 'utf8');
   assert.match(script, /^set -e -o pipefail$/m);
   const rebuild = script.split('\n').find((line) => line.includes('up -d --build'));
-  assert.match(rebuild, /^ssh \S+ "set -o pipefail; /);
+  assert.match(rebuild, /^ssh \S+ "set -o pipefail && /);
   assert.match(rebuild, /OLD=.*up -d --build.*NEW=.*\[ \\"\\\$OLD\\" != \\"\\\$NEW\\" \].*exit 1/);
   const publish = script.split('\n').findIndex((line) => line.startsWith('jj git push --bookmark main'));
   const checks = script.split('\n').findIndex((line) => line.includes('HTTP check failed'));
@@ -300,8 +303,25 @@ test('the workflow reader reads environments in any form it is sure of, and refu
     [job('    environment: [production]\n'), /an environment is an expression or a form/], [job('    environment: ${{ inputs.e }}\n'), /an environment is an expression or a form/],
     [job('    environment:\n    runs-on: x\n'), /an environment is empty/], [job('    environment:\n        name: a\n      url: b\n'), /field is indented less/],
     [job('    environment:\n      just text\n'), /an environment is not a mapping/], [job('    environment:\n      <<: *prod\n'), /environment merges a mapping in/],
-    [job('    environment:\n      name: a\n      name: b\n'), /names itself twice/], [job('    environment:\n      name: ${{ inputs.e }}\n'), /environment name is an expression/],
+    [job('    environment:\n      name: a\n      name: b\n'), /an environment sets name twice/], [job('    environment:\n      name: ${{ inputs.e }}\n'), /environment name is an expression/],
     [job('    environment:\n      url: https://x\n'), /mapping has no name/],
+    // R4-1, PA-53: what GitHub's parser may read another way is refused, never read as no environment.
+    ['\uFEFFjobs:\n  a:\n    environment: production\n', /byte-order mark/], ['  jobs:\n    a:\n      environment: production\n', /top level is indented/],
+    ['name: a\nname: b\njobs:\n  a:\n    runs-on: x\n', /top-level key name repeats/], ['jobs:\n  a:\n    runs-on: x\n  a:\n    environment: production\n', /job a repeats/],
+    [job('    environment: staging\n    environment: production\n'), /job a sets environment twice/], ['name: CI\non: push\n', /has no top-level jobs/], ['jobs:\n', /its jobs are empty/],
+    [job('    environment: { name: staging, name: production }\n'), /an environment is an expression or a form/], ['jobs:\n  a:\n    runs-on: x\njobs:\n  b:\n    environment: production\n', /top-level key jobs repeats/],
   ];
   for (const [text, why] of refused) assert.match(readWorkflow(text).unreadable ?? '(read)', why, text);
+});
+
+// R4 sweep: a deploy script too large to hash is still the script, found by its path.
+test('a deploy script too large to hash is kept by its path', () => {
+  const dir = tempDir('pipeline-script-');
+  writeFileSync(join(dir, 'big.sh'), Buffer.alloc(5 * 1024 * 1024, 35));
+  const script = scriptOf('./big.sh {tip}', dir);
+  assert.equal(script.sha256, null);
+  assert.ok(script.path.endsWith('big.sh'));
+  assert.deepEqual(deployScriptEntries(join(dir, 'big.sh'), [{ identity: 'a', deployScripts: [script] }]).map((entry) => entry.identity), ['a']);
+  writeFileSync(join(dir, 'copy.sh'), Buffer.alloc(5 * 1024 * 1024, 35));
+  assert.deepEqual(deployScriptEntries(join(dir, 'copy.sh'), [{ identity: 'a', deployScripts: [script] }]), []);
 });

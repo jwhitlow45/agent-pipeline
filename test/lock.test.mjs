@@ -57,7 +57,9 @@ test('a hook deadline bounds the wait for a lock', () => {
 // any of them may die at any step. Each state is checked: at most one live writer holds the lock,
 // the lock a live holder took is still its own, and a live breaker's guard is still its own. From
 // every state reached, the live writers can still all finish.
-function explore(initialFs, deadOwners, maxCrashes) {
+// A writer may also give up (run out of time) at any step before it holds the lock, and then must
+// leave nothing of its own behind: no guard, and no aside folder named for it.
+function explore(initialFs, deadOwners, maxCrashes, maxAborts = 0) {
   const LOCK = 'state.json.lock';
   const writers = ['p1', 'p2', 'p3'];
   const start = { fs: initialFs, crashed: [], procs: writers.map((pid) => ({ phase: 'try', me: { token: pid, pid } })) };
@@ -83,10 +85,15 @@ function explore(initialFs, deadOwners, maxCrashes) {
         remove: (path) => { delete fs[path]; },
         alive: (owner) => !deadOwners.includes(owner.pid) && !state.crashed.includes(owner.pid),
       };
+      if (proc.phase === 'aborted') return;
       const stepped = lockStep(proc, io, LOCK);
       delete stepped.wait;
       next.push({ fs, crashed: state.crashed, procs: state.procs.map((other, k) => (k === i ? stepped : other)) });
       if (state.crashed.length < maxCrashes) next.push({ ...state, crashed: [...state.crashed, proc.me.pid].sort() });
+      const aborts = state.procs.filter((other) => other.aborted).length;
+      if (aborts < maxAborts && !['held', 'release', 'releaseDrop', 'done', 'abort', 'abortGuard', 'abortDrop', 'aborted'].includes(proc.phase)) {
+        next.push({ ...state, procs: state.procs.map((other, k) => (k === i ? { ...other, phase: 'abort', aborted: true } : other)) });
+      }
     });
     return next;
   };
@@ -109,7 +116,14 @@ function explore(initialFs, deadOwners, maxCrashes) {
     edges.set(key(state), out);
   }
   // Every reached state can still reach one where every live writer is done.
-  const finished = (state) => state.procs.every((proc) => proc.phase === 'done' || state.crashed.includes(proc.me.pid));
+  const finished = (state) => state.procs.every((proc) => ['done', 'aborted'].includes(proc.phase) || state.crashed.includes(proc.me.pid));
+  for (const [k, state] of seen) {
+    if (!finished(state)) continue;
+    for (const proc of state.procs.filter((entry) => entry.phase === 'aborted')) {
+      const left = Object.entries(state.fs).find(([path, owner]) => owner.token === proc.me.token || path.includes(`.aside-${proc.me.token}-`));
+      assert.equal(left, undefined, `a writer that gave up left ${left?.[0]} behind: ${k}`);
+    }
+  }
   const good = new Set([...seen].filter(([, state]) => finished(state)).map(([k]) => k));
   for (let grew = true; grew;) {
     grew = false;
@@ -126,6 +140,8 @@ test('every interleaving of three writers keeps one live holder, with any of the
     explore({}, [], 2),
     // A lock left by a writer that died.
     explore({ [LOCK]: { token: 'd0', pid: 'd0' } }, ['d0'], 1),
+    // A breaker that gives up at any step, while another breaks the same dead lock (R4-4).
+    explore({ [LOCK]: { token: 'd0', pid: 'd0' } }, ['d0'], 0, 1),
     // And a breaker that died holding its guard.
     explore({ [LOCK]: { token: 'd0', pid: 'd0' }, [guardOf(LOCK, 'd0')]: { token: 'd1', pid: 'd1' } }, ['d0', 'd1'], 1),
   ];

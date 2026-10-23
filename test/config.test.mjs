@@ -32,6 +32,12 @@ test('an unknown key is refused, so a typo never turns a check off', () => {
   assert.throws(() => loadConfig(dir({ 'pipeline.config.json': { push: { requireScna: false } } })), /Unknown config key push.requireScna/);
 });
 
+// R4 sweep: a pattern that does not compile would turn its check off wherever it is read.
+test('a deploy pattern that is not a valid regular expression is refused', () => {
+  assert.throws(() => loadConfig(dir({ 'pipeline.config.json': { deploy: { match: 'deploy(' } } })), /deploy\.match is not a valid regular expression/);
+  assert.throws(() => loadConfig(dir({ 'pipeline.config.json': { deploy: { prodPattern: '[prod' } } })), /deploy\.prodPattern is not a valid regular expression/);
+});
+
 test('a value of the wrong type is refused', () => {
   assert.throws(() => loadConfig(dir({ 'pipeline.config.json': { push: { branches: 'ci/*' } } })), /push.branches must be a list/);
   assert.throws(() => loadConfig(dir({ 'pipeline.config.json': { design: { maxLines: '500' } } })), /design.maxLines must be a number/);

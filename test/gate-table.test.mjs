@@ -83,6 +83,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     { match: `actions/runs/5`, stdout: { workflow_id: 8, name: 'Deploy', path: '.github/workflows/deploy.yml', head_sha: tip } },
     { match: `actions/runs/9`, stdout: { workflow_id: 7, name: 'CI', path: '.github/workflows/ci.yml', head_sha: tip } },
     { match: 'rules/branches/main', stdout: [{ type: 'required_status_checks', parameters: { required_status_checks: [{ context: 'e2e', integration_id: 15368 }] } }] },
+    { match: 'protection/required_status_checks', exit: 1, stderr: 'gh: Branch not protected (HTTP 404)' },
     { match: 'alias list', stdout: "dep:\t'!gh workflow run deploy.yml --ref main'\na1:\ta2\na2:\ta1\n" },
   ]);
   Object.assign(values, { ws, tip, S1, S2, tip12: tip.slice(0, 12) });
@@ -252,7 +253,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'echo "header = x" > ~/.curlrc', 2, /curl or wget reads/],
     ['repo', 'x', 2, /ssh folder/, { tool_name: 'Edit', tool_input: { file_path: '~/.ssh/config', old_string: 'a', new_string: 'b' } }],
     ['repo', 'x', 2, /named like the git hook/, { tool_name: 'Write', tool_input: { file_path: '.husky/pre-push', content: 'exit 0' } }],
-    ['repo', 'x', 2, /config file git, jj or wget reads/, { tool_name: 'Write', tool_input: { file_path: '%root%/jj.toml', content: 'x' } }],
+    ['repo', 'x', 2, /config file or folder jj reads/, { tool_name: 'Write', tool_input: { file_path: '%root%/jj.toml', content: 'x' } }],
     ['repo', 'x', 0, null, { tool_name: 'Write', tool_input: { file_path: 'docs/shell.md', content: 'x' } }],
     ['repo', 'cat .git/config', 0],
     ['repo', 'ls .jj', 0],
@@ -498,11 +499,11 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     // PA-38: a read or sink that writes a control file or runs a program.
     ['repo', 'git log | sort -o .git/config', 2, /inside a .git or .jj folder/],
     ['repo', 'sort -o .git/config README.md', 2, /inside a .git or .jj folder/],
-    ['repo', 'git diff --out=.git/config', 2, /git diff --out=.git\/config is not an option the gate reads/],
+    ['repo', 'git diff --out=.git/config', 2, /--out runs another program or writes a file/],
     ['repo', 'git diff --output=x.patch', 2, /--output runs another program or writes a file/],
     ['repo', 'gh release download v1 --output .git/config', 2, /inside a .git or .jj folder/],
     ['repo', 'gh release download v1 -D .git/hooks', 2, /inside a .git or .jj folder/],
-    ['repo', 'git grep --open-files-in-pag=printf pipeline -- README.md', 2, /--open-files-in-pag=printf is not an option the gate reads/],
+    ['repo', 'git grep --open-files-in-pag=printf pipeline -- README.md', 2, /--open-files-in-pag runs another program/],
     ['repo', 'git grep -Oprintf pipeline', 2, /-Oprintf runs another program/],
     ['repo', 'jj diff --tool sh', 2, /jj diff --tool is not an option the gate reads/],
     ['repo', 'jj log --too=sh', 2, /not an option the gate reads/],
@@ -541,6 +542,29 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'curl --expand-data @body https://api.github.com/repos/x/y', 2, /--expand-data is not an option/],
     ['repo', 'wget --post-d=x https://github.com/x/y', 2, /not an option the gate reads/],
     ['repo', 'curl -fsSL https://api.github.com/repos/x/y -o out.json', 0],
+    // R4: one parse per tool takes clusters apart before any value is checked (PA-56, PA-57, R4-2).
+    ['repo', "curl https://api.github.com/repos/x/y -sH 'Authorization: Bearer fixture'", 2, /sends a credential/],
+    ['repo', 'curl https://api.github.com/repos/x/y -sH @headers.txt', 2, /reads a header from a file/],
+    ['repo', "curl https://api.github.com/repos/x/y -w '%output{.git/config}changed'", 2, /through curl's %output\{\}|writes a file through %output/],
+    ['repo', "curl https://api.github.com/repos/x/y -sw '%output{>>~/.zshenv}x'", 2, /through curl's %output\{\}/],
+    ['repo', 'curl https://api.github.com/repos/x/y -w @format.txt', 2, /reads curl's -w format from a file/],
+    ['repo', 'curl https://api.github.com/repos/x/y -sw@-', 2, /reads curl's -w format from stdin/],
+    ['repo', 'curl -so.git/config https://api.github.com/repos/x/y', 2, /inside a .git or .jj folder/],
+    ['repo', "curl -s -w '%{http_code}' https://api.github.com/repos/x/y", 0],
+    ['repo', "curl -w '%output{~/.ssh/config}x' https://example.com", 2, /through curl's %output\{\}/],
+    // Red team, round 4: an options file or wgetrc commands the gate cannot see, on any line.
+    ['repo', 'curl -Kx https://example.com', 2, /reads curl's options from a file \(-K\)/],
+    ['repo', 'curl --config=cfg https://example.com', 2, /reads curl's options from a file \(-K\)/],
+    ['repo', 'curl -sK cfg https://api.github.com/repos/x/y', 2, /reads curl's options from a file \(-K\)/],
+    ['repo', 'wget --config=w.rc https://example.com', 2, /reads wget's options from a file \(--config\)/],
+    ['repo', "wget -qe 'output_document = .git/config' https://example.com", 2, /runs wgetrc commands \(-e\)/],
+    ['repo', 'curl -e https://example.com/ref https://example.com', 0],
+    ['repo', 'wget -q https://example.com/x', 0],
+    ['repo', 'wget -qO.git/config https://example.com/x', 2, /inside a .git or .jj folder/],
+    ['repo', 'cp -t.git/hooks pre-commit', 2, /inside a .git or .jj folder/],
+    ['repo', "git rebase -ix 'git push origin main' main", 2, /rebase --exec runs commands/],
+    ['repo', 'git clone -qu ./evil x y', 2, /clones with a program/],
+    ['repo', 'git fetch --upload-p=./evil origin', 2, /--upload-p runs another program/],
     // R3-6: a status a merge or deploy waits on.
     ['repo', `gh api -X POST repos/${SLUG}/statuses/%tip% -f context=e2e -f state=success`, 2, /a check main's rules require/],
     ['repo', `gh api -X POST repos/${SLUG}/statuses/%tip% -f context=CI -f state=success`, 2, /the CI workflow's/],
@@ -647,6 +671,16 @@ describe('the user runs deploys and moves trunk (deploy.runBy user)', () => {
     ['repo', '$s = "../rel" + "ease.sh"; & $s b1 main', 2, /builds or starts on its own/, { tool_name: 'PowerShell' }],
     ['repo', 'Invoke-Expression "../release.sh b1 main"', 2, /registered deploy script|builds or starts/, { tool_name: 'PowerShell' }],
     ['repo', 'Get-ChildItem', 0, null, { tool_name: 'PowerShell' }],
+    // PA-58: a bare name runs what PATH finds, as PowerShell does.
+    { name: 'the deploy script on PATH as shipit', setup: (b) => { b.sh('mkdir -p ../bin && cp deploy.sh ../bin/shipit && chmod +x ../bin/shipit'); b.env.PATH = `${join(b.root, 'bin')}:${b.env.PATH}`; } },
+    ['repo', 'shipit b1 main', 2, /registered deploy script, through PowerShell/, { tool_name: 'PowerShell' }],
+    ['repo', '& shipit b1 main', 2, /registered deploy script, through PowerShell/, { tool_name: 'PowerShell' }],
+    ['repo', '& nosuchprogram b1 main', 2, /cannot find that program/, { tool_name: 'PowerShell' }],
+    // Red team, round 4: a wrapper runs a bare name through PATH, as the shell does.
+    ['repo', 'command shipit b1 main', 2, /names the deploy script through command/],
+    ['repo', 'nohup shipit b1 main', 2, /names the deploy script through nohup/],
+    ['repo', 'env shipit b1 main', 2, /names the deploy script through env/],
+    ['repo', 'echo shipit b1 main', 0],
     ['repo', 'gh run rerun 12', 0],
     // PA-37: the script is known by its content too, and its pattern only in its own repository.
     ['root', '%root%/copy-of-deploy.sh b1 main', 2, /The user runs deploys/],
@@ -821,6 +855,88 @@ describe('a registry that cannot be read (R2-11d)', () => {
     ['repo', 'jj git push -b ci/x', 2, /repos\.json is not valid JSON.*outside the agent/],
     ['repo', 'jj log', 2, /repos\.json is not valid JSON/],
     ['repo', './deploy.sh b1 main', 2, /repos\.json is not valid JSON/],
+    // R4 sweep: a deploy script can have any name, so while the registry is unknown only plain reads
+    // and the system's own programs run.
+    { name: 'a script named ship', setup: (b) => b.sh('cp deploy.sh ship.sh 2>/dev/null || printf "#!/bin/sh\\n" > ship.sh; chmod +x ship.sh') },
+    ['repo', './ship.sh b1 main', 2, /repos\.json is not valid JSON/],
+    ['repo', 'sh ship.sh b1 main', 2, /repos\.json is not valid JSON/],
+    ['repo', 'node ship.mjs', 2, /repos\.json is not valid JSON/],
+    ['repo', 'mv notes.txt old.txt', 0],
+    { name: 'the script on PATH as shipit', setup: (b) => { b.sh('mkdir -p ../bin && cp ship.sh ../bin/shipit'); b.env.PATH = `${join(b.root, 'bin')}:${b.env.PATH}`; } },
+    ['repo', 'shipit b1 main', 2, /repos\.json is not valid JSON/],
+  ]);
+});
+
+// The R4 sweep of every place a read could fail: what the gate cannot read or prove refuses.
+describe('what the gate cannot read refuses (R4 sweep)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  box.cli(['config', '--check']);
+  const plain = join(box.root, 'plain');
+  const other = join(box.root, 'other');
+  const bare = join(box.root, 'bare');
+  box.sh(`git clone -q https://github.com/${SLUG}.git ${JSON.stringify(plain)}`, box.root);
+  box.sh('i=0; while [ $i -lt 45 ]; do ln -s l$((i+1)) l$i; i=$((i+1)); done; ln -s loopb loopa; ln -s loopa loopb; ln -s l40 short', box.root);
+  // A jj repository without the pipeline whose remote cannot be read, and one with no remote at all.
+  for (const [dir, remote] of [[other, join(box.root, 'missing.git')], [bare, null]]) {
+    box.sh(`mkdir -p ${JSON.stringify(dir)}`, box.root);
+    box.sh('jj git init --colocate -q 2>/dev/null || jj git init --colocate', dir);
+    if (remote) box.sh(`jj git remote add origin ${JSON.stringify(remote)}`, dir);
+    box.commit('chore: one', { 'a.txt': 'a\n' }, dir);
+    box.sh('jj bookmark set x -r @-', dir);
+  }
+  runRows(box, { repo: box.repo, root: box.root, plain, other, bare }, [
+    // A heredoc the input ends inside runs to the end, as the shells read it.
+    ['repo', 'cat > ~/.zshenv <<Z', 2, /shell startup file/],
+    ['repo', 'cp notes.txt .claude/settings.local.json <<Z\nbody', 2, /agent settings/],
+    ['repo', "sh <<'Z'\njj git push -b feature", 2, through('sh')],
+    ['repo', 'cat <<Z\njj git push -b feature', 0],
+    ['repo', 'echo "it is not closed', 2, /cannot read this line .*so it cannot tell what it runs or writes/],
+    ['repo', 'ls >', 2, /cannot read this line/],
+    // A plain git clone of a pipeline repository has no jj view for the gate to check.
+    ['plain', 'git push origin HEAD:refs/heads/main', 2, /a git clone of a repository with the pipeline that jj does not know/],
+    ['plain', 'gh pr merge 1 --squash', 2, /a git clone of a repository with the pipeline that jj does not know/],
+    ['plain', 'git status', 0],
+    { name: 'the clone without its config file', setup: (b) => b.sh('rm pipeline.config.json', plain) },
+    ['plain', 'git push origin HEAD:refs/heads/ci/x', 2, /a git clone of a repository with the pipeline that jj does not know/],
+    // Links past what the system follows, or in a loop, land somewhere the gate cannot tell.
+    ['root', 'echo x > %root%/l0', 2, /more links than the gate follows/],
+    ['root', 'echo x > %root%/loopa', 2, /more links than the gate follows/],
+    ['root', 'echo x > %root%/short', 0],
+    // Only a missing remote proves a repository has no pipeline.
+    ['other', 'jj git push -b x', 2, /could not read the remote's branches/],
+    ['bare', 'jj git push -b x', 0],
+    // A push setting git cannot read leaves where the push goes unknown.
+    { name: 'a push.followTags git cannot read as a boolean', setup: (b) => b.sh('git config push.followTags maybe') },
+    ['repo', 'git push origin ci/x:refs/heads/ci/x', 2, /could not read push\.followTags/],
+    { name: 'push.followTags unset', setup: (b) => b.sh('git config --unset push.followTags') },
+    // A config an agent can break must not turn the review checks off.
+    { name: 'an unknown key in the working copy config', setup: (b) => b.write('pipeline.local.json', '{ "bogus": 1 }\n') },
+    ['repo', 'agent-review start --topic darkdesign', 2, /cannot read the pipeline here .*Unknown config key bogus/],
+    { name: 'the working copy config repaired', setup: (b) => b.sh('rm pipeline.local.json') },
+    // An unregistered repository whose working copy config does not parse.
+    { name: 'a broken config in an unregistered repository', setup: (b) => b.write('pipeline.config.json', '{ nope', bare) },
+    ['bare', './run.sh', 2, /pipeline\.config\.json cannot be read .*cannot tell whether this runs the deploy command/],
+    ['bare', 'ls', 0],
+    ['bare', 'jj log -r @', 0],
+  ]);
+});
+
+// R4 sweep: GitHub answers the gate reads in full or not at all.
+describe('GitHub answers read in full (R4 sweep)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  box.cli(['config', '--check']);
+  const sha = box.sh('jj log --no-graph -r main -T commit_id').trim();
+  const write = `gh api -X POST repos/${SLUG}/statuses/%sha% -f context=lint -f state=success`;
+  const notProtected = { match: 'protection/required_status_checks', exit: 1, stderr: 'gh: Branch not protected (HTTP 404)' };
+  runRows(box, { repo: box.repo, sha }, [
+    { name: 'a workflow list that says it has more', setup: (b) => b.ghScript([{ match: 'actions/workflows?per_page=100&page=1', stdout: { total_count: 120, workflows: ALL_WORKFLOWS } }, { match: 'actions/workflows?per_page=100&page=2', stdout: { total_count: 120, workflows: [] } }, { match: 'rules/branches/main', stdout: [] }, notProtected]) },
+    ['repo', write, 2, /counts 120 workflows .* could read only/],
+    { name: 'a workflow list in another form', setup: (b) => b.ghScript([{ match: 'actions/workflows?per_page=100', stdout: { message: 'odd' } }, { match: 'rules/branches/main', stdout: [] }, notProtected]) },
+    ['repo', write, 2, /in a form the gate does not read/],
+    { name: 'no workflow named CI', setup: (b) => b.ghScript([workflowsRule([]), { match: 'rules/branches/main', stdout: [] }, notProtected]) },
+    ['repo', write, 2, /cannot tell which workflow is CI/],
   ]);
 });
 
@@ -1011,11 +1127,26 @@ describe('the workflow GitHub runs is the one the gate reads', () => {
   branch('ci/calls', workflow('  call:\n    uses: ./.github/workflows/release.yml\n', { '.github/workflows/release.yml': 'on: workflow_call\njobs:\n  ship:\n    environment: production\n' }));
   branch('ci/elsewhere', workflow('  call:\n    uses: other-owner/other/.github/workflows/ship.yml@main\n'));
   branch('ci/staging', workflow('  ship:\n    environment:\n      name: staging\n'));
+  // R4: what the reader cannot prove is refused (R4-1, PA-53, PA-55), and a callee counts by its path (PA-54).
+  const indented = (text) => text.split('\n').map((line) => (line ? `  ${line}` : line)).join('\n');
+  branch('ci/indented', { '.github/workflows/ci.yml': indented('name: CI\non: workflow_dispatch\njobs:\n  ship:\n    environment: production\n') });
+  branch('ci/bom', { '.github/workflows/ci.yml': '\uFEFFjobs:\n  ship:\n    environment: production\n' });
+  branch('ci/twice', workflow('  ship:\n    environment: staging\n    environment: production\n'));
+  branch('ci/twojobs', workflow('  ship:\n    runs-on: x\n  ship:\n    environment: production\n'));
+  branch('ci/nojobs', { '.github/workflows/ci.yml': 'name: CI\non: workflow_dispatch\n' });
+  branch('ci/callee', workflow('  call:\n    uses: ./.github/workflows/deploy-prod.yml\n', { '.github/workflows/deploy-prod.yml': 'on: workflow_call\njobs:\n  ship:\n    runs-on: x\n' }));
+  const callee = box.sh('jj log --no-graph -r ci/callee -T commit_id').trim();
+  box.sh('jj new main');
+  box.write('.github/workflows/ci.yml', 'x');
+  box.sh('rm .github/workflows/ci.yml && ln -s ../../README.md .github/workflows/ci.yml');
+  const linked = box.commit('ci: a linked workflow');
+  box.sh(`jj bookmark set ci/linked -r ${linked} && jj git push -b ci/linked`);
   box.ghScript([
     workflowsRule(),
     { match: 'actions/runs/31', stdout: { workflow_id: 7, name: 'CI', path: '.github/workflows/ci.yml', head_sha: prod } },
     { match: 'actions/runs/32', stdout: { workflow_id: 7, name: 'CI', path: '.github/workflows/ci.yml', head_sha: 'b'.repeat(40) } },
     { match: 'actions/runs/33', stdout: { workflow_id: 7, name: 'CI', path: '.github/workflows/ci.yml' } },
+    { match: 'actions/runs/34', stdout: { workflow_id: 7, name: 'CI', path: '.github/workflows/ci.yml', head_sha: callee } },
   ]);
   runRows(box, { repo: box.repo }, [
     ['repo', 'gh workflow run ci.yml --ref main', 0],
@@ -1031,6 +1162,14 @@ describe('the workflow GitHub runs is the one the gate reads', () => {
     ['repo', 'gh run rerun 31', 2, /never run a production deploy/],
     ['repo', 'gh run rerun 32', 2, /does not have that commit/],
     ['repo', 'gh run rerun 33', 2, /did not say which commit/],
+    ['repo', 'gh workflow run ci.yml --ref ci/indented', 2, /its top level is indented/],
+    ['repo', 'gh workflow run ci.yml --ref ci/bom', 2, /byte-order mark/],
+    ['repo', 'gh workflow run ci.yml --ref ci/twice', 2, /sets environment twice/],
+    ['repo', 'gh workflow run ci.yml --ref ci/twojobs', 2, /job ship repeats/],
+    ['repo', 'gh workflow run ci.yml --ref ci/nojobs', 2, /has no top-level jobs/],
+    ['repo', 'gh workflow run ci.yml --ref ci/linked', 2, /not a plain file/],
+    ['repo', 'gh workflow run ci.yml --ref ci/callee', 2, /never run a production deploy/],
+    ['repo', 'gh run rerun 34', 2, /never run a production deploy/],
   ]);
 });
 
@@ -1079,9 +1218,35 @@ describe('a protected folder that does not exist yet', () => {
   const box = sandbox({ config: baseConfig });
   after(() => box.cleanup());
   box.env.XDG_CONFIG_HOME = join(box.root, 'xdg');
+  // PA-59: JJ_CONFIG is a path list of files and folders, and gh reads GH_CONFIG_DIR.
+  box.env.JJ_CONFIG = [join(box.root, 'jj.toml'), join(box.root, 'jjconf')].join(':');
+  box.env.GH_CONFIG_DIR = join(box.root, 'ghconf');
   runRows(box, { repo: box.repo, root: box.root }, [
+    ['repo', 'x', 2, /config file or folder jj reads/, { tool_name: 'Write', tool_input: { file_path: '%root%/jjconf/extra.toml', content: '[aliases]' } }],
+    ['repo', 'echo x > %root%/jj.toml', 2, /config file or folder jj reads/],
+    ['repo', 'x', 2, /gh's config folder/, { tool_name: 'Write', tool_input: { file_path: '%root%/ghconf/config.yml', content: 'pager: sh' } }],
+    ['repo', 'x', 2, /gpg's folder/, { tool_name: 'Write', tool_input: { file_path: '~/.gnupg/gpg-agent.conf', content: 'pinentry-program /tmp/x' } }],
     ['repo', 'x', 2, /gh's config folder/, { tool_name: 'Write', tool_input: { file_path: '%root%/xdg/gh/config.yml', content: 'pager: sh' } }],
     ['repo', 'x', 2, /gh's config folder/, { tool_name: 'Write', tool_input: { file_path: '%root%/XDG/Gh/config.yml', content: 'pager: sh' } }],
     ['repo', 'x', 0, null, { tool_name: 'Write', tool_input: { file_path: '%root%/xdg/other/config.yml', content: 'x' } }],
+  ]);
+});
+
+// PA-60: a classic protection read that fails for any reason but "not protected" leaves the
+// required checks unknown, so a status write is refused.
+describe('required checks that cannot be read', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  box.cli(['config', '--check']);
+  const sha = box.sh('jj log --no-graph -r main -T commit_id').trim();
+  box.ghScript([workflowsRule(), { match: 'rules/branches/main', stdout: [] }, { match: 'protection/required_status_checks', exit: 1, stderr: 'gh: Server Error (HTTP 503)' }]);
+  runRows(box, { repo: box.repo, sha }, [
+    ['repo', `gh api -X POST repos/${SLUG}/statuses/%sha% -f context=lint -f state=success`, 2, /could not read main's classic protection/],
+    { name: 'a 404 that hides the branch', setup: (b) => b.ghScript([workflowsRule(), { match: 'rules/branches/main', stdout: [] }, { match: 'protection/required_status_checks', exit: 1, stderr: 'gh: Not Found (HTTP 404)' }]) },
+    ['repo', `gh api -X POST repos/${SLUG}/statuses/%sha% -f context=lint -f state=success`, 2, /could not read main's classic protection/],
+    { name: 'a rules answer that is not a list', setup: (b) => b.ghScript([workflowsRule(), { match: 'rules/branches/main', stdout: { message: 'odd' } }]) },
+    ['repo', `gh api -X POST repos/${SLUG}/statuses/%sha% -f context=lint -f state=success`, 2, /did not answer a list/],
+    { name: 'not protected', setup: (b) => b.ghScript([workflowsRule(), { match: 'rules/branches/main', stdout: [] }, { match: 'protection/required_status_checks', exit: 1, stderr: 'gh: Branch not protected (HTTP 404)' }]) },
+    ['repo', `gh api -X POST repos/${SLUG}/statuses/%sha% -f context=lint -f state=success`, 0],
   ]);
 });
