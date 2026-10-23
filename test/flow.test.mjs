@@ -4,44 +4,7 @@ import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sandbox, SLUG, WORDS } from './helpers.mjs';
-
-const TEST_FILE = "import { test } from 'node:test'; import assert from 'node:assert'; import { dark } from './theme.mjs'; test('dark', () => assert.equal(dark(), true));\n";
-
-const baseConfig = {
-  push: { public: false },
-  review: { provider: 'builtin' },
-  ci: { workflow: 'CI' },
-  deploy: { command: './deploy.sh {name} {tip}', match: 'deploy\\.sh', tipArg: 2, runBy: 'agent' },
-  notify: { command: ['sh', '-c', 'echo "$1" >> "$NOTES"', 'sh', '{message}'] },
-  docs: { featureList: 'FEATURES.md', behaviorPaths: ['src/**'] },
-};
-
-// A fast run built to the point of a pushed, scanned tip, shared by the tests that start there.
-function builtRun(box, { run = 'dark', lane = 'a' } = {}) {
-  box.cli(['intake', '--run', run, '--kind', 'fast', '--words', WORDS]);
-  box.write(`../${run}-spec.md`, `The user's words: ${WORDS}\n`);
-  box.cli(['spec', '--run', run, '--file', `../${run}-spec.md`]);
-  const ws = join(box.root, `demo-${run}`);
-  box.sh(`jj workspace add --name demo-${run} ../demo-${run} -r main`);
-  assert.equal(box.cli(['lane', '--run', run, '--lane', lane, '--workspace', ws, '--owns', 'src/**,FEATURES.md']).code, 0);
-  box.commit('feat(ui): dark mode toggle', { 'src/theme.mjs': 'export const dark = () => true;\n', 'src/theme.test.mjs': TEST_FILE }, ws);
-  box.commit('docs: dark mode in the feature list', { 'FEATURES.md': '- Dark mode\n' }, ws);
-  assert.equal(box.cli(['commits', '--run', run, '--lane', lane], { cwd: ws }).code, 0);
-  assert.equal(box.cli(['check', '--run', run, '--lane', lane], { cwd: ws }).code, 0);
-  const fix = box.sh('jj log --no-graph -r @-- -T commit_id', ws).trim();
-  assert.equal(box.cli(['mutation', '--run', run, '--lane', lane, '--commit', fix, '--test', 'src/theme.test.mjs'], { cwd: ws }).code, 0);
-  box.write(`../${run}-report.md`, '# Report\n');
-  box.cli(['report', '--run', run, '--lane', lane, '--file', `../${run}-report.md`]);
-  box.cli(['signoff', '--run', run, '--stage', 'build', '--item', 'scope', '--by', 'owner', '--note', 'one commit per item']);
-  assert.equal(box.cli(['build', '--run', run]).code, 0);
-  return { ws, tip: box.run(run).tip };
-}
-
-const ciScript = (tip, { jobs = [{ name: 'e2e (1)', status: 'completed', conclusion: 'success' }], conclusion = 'success' } = {}) => [
-  { match: 'run list', stdout: [{ databaseId: 77, status: 'completed', conclusion, workflowName: 'CI', headSha: tip, url: `https://github.com/${SLUG}/actions/runs/77`, createdAt: '2026-01-01T00:00:00Z' }] },
-  { match: 'run view 77', stdout: { databaseId: 77, status: 'completed', conclusion, url: `https://github.com/${SLUG}/actions/runs/77`, headSha: tip, jobs } },
-];
+import { baseConfig, builtRun, ciScript, sandbox, SLUG, WORDS } from './helpers.mjs';
 
 describe('intake, briefs and design', () => {
   const box = sandbox({ config: { ...baseConfig, brief: { preamble: 'agent-preamble.md' }, design: { requiredSections: ['Tests'] }, review: { provider: 'agent-review' } } });
@@ -233,8 +196,8 @@ describe('scan, push, CI, review and deploy', () => {
 
   test('the gate refuses pushes to other branches, force pushes and pushes it cannot name', () => {
     assert.match(box.gate('jj bookmark set feature -r @- && jj git push --bookmark feature', ws).err, /not a branch agents push to/);
-    assert.match(box.gate('jj git push --all', ws).err, /Name each bookmark/);
-    assert.match(box.gate('jj git push -c @-', ws).err, /cannot name/);
+    assert.match(box.gate('jj bookmark set feature -r @- && jj git push --all', ws).err, /feature is not a branch agents push to/);
+    assert.match(box.gate('jj git push -c @-', ws).err, /push-[a-z]+ is not a branch agents push to/);
     assert.match(box.gate('jj git push', ws).err, /whatever bookmarks jj picks/);
     assert.match(box.gate('git push --force origin ci/dark', ws).err, /force push/);
     assert.match(box.gate('git push origin +ci/dark', ws).err, /force push/);
@@ -342,7 +305,11 @@ describe('scan, push, CI, review and deploy', () => {
     assert.equal(left.code, 1);
     assert.match(left.out, /ci\/dark is merged but still on origin/);
     assert.match(left.out, /Workspace demo-dark/);
-    box.sh('jj bookmark delete ci/dark && jj git push --deleted && jj workspace forget demo-dark');
+    // The deletion and its push are separate commands, and the gate allows the push of a deleted ci/* branch.
+    assert.match(left.out, /jj git push --remote origin --bookmark ci\/dark/);
+    box.sh('jj bookmark delete ci/dark');
+    assert.equal(box.gate('jj git push --remote origin --bookmark ci/dark').code, 0);
+    box.sh('jj git push --remote origin --bookmark ci/dark && jj workspace forget demo-dark');
     box.sh(`rm -rf ${JSON.stringify(ws)}`);
     const done = box.cli(['cleanup', '--run', 'dark']);
     assert.equal(done.code, 0, done.all);
@@ -476,6 +443,7 @@ describe('hooks for agents without them', () => {
     assert.equal(allowed.code, 0);
     assert.equal(box.sh('cat ran.txt').trim(), 'ran');
     box.commit('feat: x', { 'x.txt': 'x\n' });
+    box.sh('jj bookmark set main -r @-');
     const blocked = box.cli(['exec', '--', 'jj', 'git', 'push', '--bookmark', 'main']);
     assert.equal(blocked.code, 2);
     assert.match(blocked.err, /Moving main is a deploy step/);

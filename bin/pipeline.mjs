@@ -100,7 +100,8 @@ try {
     else await COMMANDS[name](values);
   }
 } catch (error) {
-  // A gate that crashes exits 1, which hook harnesses report without blocking the command.
   process.stderr.write(`pipeline: ${error.message}\n`);
-  process.exitCode = error instanceof UsageError ? 64 : 1;
+  // A hook harness runs the command unless the gate exits 2, so a gate that fails refuses.
+  const gating = ['gate', 'exec'].includes(process.argv[2]);
+  process.exitCode = gating ? 2 : error instanceof UsageError ? 64 : 1;
 }
