@@ -72,3 +72,27 @@ test('the example config loads with only the placeholder warnings', () => {
   assert.equal(config.deploy.runBy, 'user');
   assert.ok(warnings(config).every((warning) => /scan.private/.test(warning)));
 });
+
+test('the gate keys come from the committed copy on trunk, and the working copy keeps every other key', () => {
+  const root = dir({ 'pipeline.config.json': { push: { branches: ['*'] }, deploy: { runBy: 'agent', match: 'x' }, checks: { parallel: [{ name: 'unit', run: 'u' }] } } });
+  const config = loadConfig(root, { committed: { deploy: { runBy: 'user' } } });
+  assert.deepEqual(config.push.branches, DEFAULTS.push.branches);
+  assert.equal(config.deploy.runBy, 'user');
+  assert.equal(config.deploy.match, null);
+  assert.equal(config.checks.parallel[0].name, 'unit');
+  assert.deepEqual(config.drift, ['push', 'deploy.runBy', 'deploy.match']);
+  assert.ok(warnings(config).some((warning) => /push in this working copy differs/.test(warning)));
+});
+
+test('without a committed copy on trunk the gate keys stay at their defaults, and the gate is off', () => {
+  const config = loadConfig(dir({ 'pipeline.config.json': { deploy: { runBy: 'agent' } } }), { committed: null });
+  assert.equal(config.deploy.runBy, 'user');
+  assert.equal(config.committed, false);
+  assert.ok(warnings(config).some((warning) => /not committed on origin\/main/.test(warning)));
+});
+
+test('the gitignored local file may not set a gate key', () => {
+  assert.throws(() => loadConfig(dir({ 'pipeline.config.json': {}, 'pipeline.local.json': { push: { public: false } } }), { committed: {} }), /sets push, which the gate reads only from pipeline.config.json committed/);
+  assert.throws(() => loadConfig(dir({ 'pipeline.config.json': {}, 'pipeline.local.json': { review: { trustGithubStatus: true } } }), { committed: {} }), /sets review.trustGithubStatus/);
+  assert.equal(loadConfig(dir({ 'pipeline.config.json': {}, 'pipeline.local.json': { deploy: { command: '~/deploy.sh {tip}' } } }), { committed: {} }).deploy.command, '~/deploy.sh {tip}');
+});
