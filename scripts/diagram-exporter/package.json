@@ -1,0 +1,12 @@
+{
+  "name": "agent-pipeline-diagram-exporter",
+  "private": true,
+  "description": "The pinned exporter scripts/render-diagrams.mjs installs into a temporary folder with npm ci.",
+  "dependencies": {
+    "@excalidraw/excalidraw": "0.18.1",
+    "esbuild": "0.28.2",
+    "playwright-core": "1.63.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  }
+}
