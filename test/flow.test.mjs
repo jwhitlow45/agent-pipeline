@@ -731,3 +731,51 @@ describe('a build recorded while the lane moves', () => {
     assert.equal(box.run('dark').stages.build.state, 'in-progress');
   });
 });
+
+describe('a live-hole run across a rebase', () => {
+  const box = sandbox({ config: { ...baseConfig, push: { public: true } } });
+  after(() => box.cleanup());
+  let ws;
+  let moved;
+  const LIVE = /fixes a hole that is live on the deployed server/;
+
+  test('counts only checks that ran on the deploy tip, never lane checks copied onto a rebased one', () => {
+    ({ ws } = builtRun(box, { intake: ['--live-hole'] }));
+    box.cli(['review', 'skip', '--run', 'dark', '--reason', 'the user said to skip review for this test']);
+    box.commit('chore: unrelated work on main', { 'other.txt': 'x\n' });
+    box.sh('jj bookmark set main -r @- && jj git push --bookmark main');
+    box.sh('jj rebase -b @ -d main', ws);
+    moved = box.sh('jj log --no-graph -r @- -T commit_id', ws).trim();
+    assert.match(box.cli(['rebase', '--run', 'dark', '--tip', moved], { cwd: ws }).out, /2 commits keep their patch-id/);
+    assert.ok(box.run('dark').lanes.a.checks.some((result) => result.tip === moved && result.remappedFrom));
+    box.cli(['build', '--run', 'dark']);
+    box.cli(['scan', '--run', 'dark'], { cwd: ws });
+    const before = box.cli(['deploy', 'check', '--run', 'dark']);
+    assert.equal(before.code, 1, before.all);
+    assert.match(before.out, /deploys on local checks in place of CI.*unit has not run/);
+    const checked = box.cli(['check', '--run', 'dark', '--tip', moved, '--workspace', ws]);
+    assert.equal(checked.code, 0, checked.all);
+    assert.equal(box.cli(['deploy', 'check', '--run', 'dark']).code, 0);
+  });
+
+  test('keeps trunk private too: moving main before the deploy is publishing the hole', () => {
+    assert.match(box.gate(`jj bookmark set main -r ${moved} && jj git push -b main`, box.repo).err, LIVE);
+  });
+});
+
+describe('a live-hole run whose fix is amended', () => {
+  const box = sandbox({ config: { ...baseConfig, push: { public: true } } });
+  after(() => box.cleanup());
+
+  test('keeps the commit it recorded before the amend private', () => {
+    const { ws, tip } = builtRun(box, { intake: ['--live-hole'] });
+    const fix = box.sh(`jj log --no-graph -r '${tip}-' -T commit_id`, ws).trim();
+    box.sh(`jj edit ${fix}`, ws);
+    box.write('src/theme.mjs', 'export const dark = () => 1 === 1;\n', ws);
+    box.sh('jj new && jj edit @- && jj new', ws);
+    box.cli(['commits', '--run', 'dark', '--lane', 'a'], { cwd: ws });
+    assert.ok(!box.run('dark').lanes.a.commits.some((commit) => commit.id === fix));
+    box.cli(['scan', '--run', 'dark', '--tip', fix], { cwd: ws });
+    assert.match(box.gate(`jj git push --named ci/old=${fix}`, ws).err, /fixes a hole that is live on the deployed server/);
+  });
+});
