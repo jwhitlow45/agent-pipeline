@@ -468,3 +468,18 @@ describe('hooks for agents without them', () => {
     assert.equal(box.gate('jj git push --all', join(box.root, 'plain')).code, 0);
   });
 });
+
+describe('the scan reads each commit on its own', () => {
+  const box = sandbox({ config: baseConfig, local: { scan: { private: ['secret-host.example'] } } });
+  after(() => box.cleanup());
+
+  test('a private string one commit adds and the next removes still refuses the scan, and is never printed', () => {
+    const { ws } = builtRun(box);
+    box.commit('docs: a note', { 'notes.md': 'see secret-host.example\n' }, ws);
+    box.commit('docs: the note without the host', { 'notes.md': 'see the host\n' }, ws);
+    const result = box.cli(['scan', '--run', 'dark', '--tip', '@-'], { cwd: ws });
+    assert.equal(result.code, 1);
+    assert.match(result.out, /error private [0-9a-f]{12} notes.md:1: a string from scan.private/);
+    assert.ok(!result.all.includes('secret-host.example'));
+  });
+});

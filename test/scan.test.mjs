@@ -64,7 +64,41 @@ test('excluded files are not scanned', () => {
 });
 
 test('scanResult splits errors from findings to look at', () => {
-  const result = scanResult([commit({ signature: 'bad' })], diff('a.js', ['el.innerHTML = x']), config());
+  const one = commit({ signature: 'bad' });
+  const result = scanResult([one], new Map([[one.id, diff('a.js', ['el.innerHTML = x'])]]), config());
   assert.equal(result.errors.length, 1);
   assert.equal(result.reviews.length, 1);
+});
+
+test('each commit is scanned on its own diff, so a string added and then removed is still found', () => {
+  const added = commit({ id: 'b'.repeat(40) });
+  const removed = commit({ id: 'c'.repeat(40) });
+  const patches = new Map([[added.id, diff('a.md', ['host secret-host.example'])], [removed.id, diff('a.md', ['host gone'])]]);
+  const result = scanResult([added, removed], patches, config());
+  assert.deepEqual(result.errors.map((finding) => [finding.kind, finding.where]), [['private', 'bbbbbbbbbbbb a.md:1']]);
+  assert.throws(() => scanResult([added], new Map(), config()), /no diff was read/);
+});
+
+test('a private string, a private path or a secret in a message or a file name is an error', () => {
+  const token = `ghp_${'b'.repeat(36)}`;
+  const findings = scanCommits([
+    commit({ description: 'fix: talk to secret-host.example' }),
+    commit({ description: `fix: logs in ${HOME_PATH}` }),
+    commit({ description: `fix: rotate ${token}` }),
+    commit({ files: [{ source: 'docs/secret-host.example.md', path: 'docs/secret-host.example.md', status: 'added' }] }),
+  ], config());
+  assert.deepEqual(kinds(findings), ['error:private', 'error:private-path', 'error:secret', 'error:private']);
+  assert.deepEqual(findings.map((finding) => finding.where.split(' ')[1]), ['message', 'message', 'message', 'path']);
+});
+
+test('no finding repeats the private string or the secret it found', () => {
+  const token = `ghp_${'c'.repeat(36)}`;
+  const findings = [
+    ...scanDiff(diff('a.js', [`fetch("https://secret-host.example/x?t=${token}")`, 'db = "postgres://user:hunter22@db.internal/x"']), config({ privateRegex: ['internal-[a-z]+'] })),
+    ...scanDiff(diff('docs/secret-host.example.md', ['plain line, internal-alpha']), config({ privateRegex: ['internal-[a-z]+'] })),
+    ...scanCommits([commit({ description: `fix: ${token}` })], config()),
+  ];
+  const shown = JSON.stringify(findings);
+  for (const value of ['secret-host.example', token, 'hunter22', 'internal-alpha', 'internal-[a-z]+']) assert.ok(!shown.includes(value), `${value} shown in ${shown}`);
+  assert.ok(findings.some((finding) => finding.kind === 'url' && /not shown/.test(finding.text)));
 });
