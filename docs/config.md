@@ -2,7 +2,7 @@
 
 A project declares its pipeline in `pipeline.config.json` at the repository root, committed. `pipeline.local.json` beside it is gitignored and holds what must never be committed: private values and paths. Both merge over the defaults below, and the local file wins for every key except the gate's own. `pipeline config` prints the merged result, and `pipeline config --check` its warnings.
 
-The gate's own keys come only from `pipeline.config.json` as committed on the remote trunk (jj's `trunk()`): `trunk`, `remote`, `push.*`, `ci.workflow`, `review.provider`, `review.trustGithubStatus`, `review.trustedStatusWriters`, `deploy.runBy`, `deploy.match`, `deploy.tipArg`, `deploy.prodPattern` and `deploy.deployWorkflows`. An agent can edit its working copy, but not the remote trunk without passing the gate, so a working-copy edit never loosens the gate. `pipeline.local.json` may not set them at all. A change to one takes effect once it reaches trunk, and `config --check` names each key whose working-copy value differs. A repository whose trunk has no committed config is not gated.
+The gate's own keys come only from `pipeline.config.json` as committed at the trunk commit the remote itself reports, never from jj's `trunk()` or a local ref: `trunk`, `remote`, `push.*`, `ci.workflow`, `review.provider`, `review.trustGithubStatus`, `review.trustedStatusWriters`, `deploy.runBy`, `deploy.match`, `deploy.tipArg`, `deploy.prodPattern`, `deploy.deployWorkflows`, `deploy.allowedWorkflows` and `github.allowedMutations`. An agent can edit its working copy, but not the remote trunk without passing the gate, so a working-copy edit never loosens the gate. `pipeline.local.json` may not set them at all. A change to one takes effect once it reaches trunk, and `config --check` names each key whose working-copy value differs. A repository whose trunk has no committed config is not gated, unless this machine has registered it with the pipeline: then the gate refuses until the config is back on trunk.
 
 An unknown key is refused, so a typo never turns a check off. A value of the wrong type is refused too. A value in angle brackets, such as `<private-domain>`, is a placeholder: it is never scanned for, and `config --check` reports it.
 
@@ -109,15 +109,22 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 
 | Key | Default | Meaning |
 |---|---|---|
-| `deploy.command` | `null` | The deploy command, with `{name}`, `{tip}` and `{prev}`. |
-| `deploy.match` | `null` | A regex that finds the deploy command in a shell command, for the gate. It must match from the command's first word. The gate checks every registered repository's pattern, wherever the command runs. |
+| `deploy.command` | `null` | The deploy command, with `{name}`, `{tip}` and `{prev}`. Its script (the first word, or the first after an interpreter) is how the gate knows the deploy wherever it runs, by real path and content. It may live in `pipeline.local.json`. |
+| `deploy.match` | `null` | A regex that finds the deploy command in a shell command run inside this repository's folders, for the gate. It must match from the command's first word. |
 | `deploy.tipArg` | `null` | Which positional argument of the deploy command is the revision it deploys, counted from 1. |
 | `deploy.runBy` | `"user"` | `"user"`: agents never run the deploy or move trunk, and are given the command for the user. `"agent"`: agents may, after the gate. |
 | `deploy.requiredChecks` | backup, health, load, http | What `deploy record` must be given. `restarts` may be added. |
 | `deploy.healthyValues` | healthy, ok | |
-| `deploy.deployWorkflows` | `"deploy"` | A regex for workflow names that deploy. |
-| `deploy.prodPattern` | prod or production as a word | Workflows and environments agents never run. |
+| `deploy.deployWorkflows` | `"deploy"` | A regex over a workflow's file path and display name for the workflows that deploy. A workflow whose file names an `environment:` deploys too. Name every deploy workflow so one of these holds. |
+| `deploy.allowedWorkflows` | `[]` | Under `runBy: "user"`, the workflows agents may still dispatch or rerun, by file path (`.github/workflows/lint.yml`). Every other workflow is the user's. |
+| `deploy.prodPattern` | prod or production as a word | Workflows and environments agents never run, matched against a workflow's path, name, the `environment:` values its file names on trunk, and its inputs. |
 | `notify.command` | `null` | An argument list with `{message}`, such as `["agent-notify", "{message}"]`, or a shell string that gets the message as `$1`. |
+
+## `github`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `github.allowedMutations` | `[]` | GraphQL mutations agents may send with `gh api graphql`, by name. Every other mutation is refused. |
 
 ## `docs`, `livePlay`, `followups`, `cleanup`, `signoffs`
 

@@ -11,7 +11,9 @@ You coordinate work through stages. Each stage records what it checked in a ledg
 
 ## When the gate blocks
 
-Read the reason, do the missing stage, then run the command again. Never reword a command to get past the gate. A form the gate cannot read (a variable, xargs, a script fed through a pipe) is refused: run the plain command with every argument written out, on its own line. When the gate is wrong, tell the user. When it blocks for missing review or a production deploy, the user decides: ask, or give the user the command.
+Read the reason, do the missing stage, then run the command again. Never reword a command to get past the gate. When the gate is wrong, tell the user. When it blocks for missing review or a production deploy, the user decides: ask, or give the user the command.
+
+Write every jj, git, gh and deploy command in plain form: commands joined by `&&`, every word written out, a `cd <folder>` only first, pipes only into `head`, `tail`, `grep` and the like, and at most one push, deploy, merge or API write per line, placed last, with only reads and `jj bookmark set NAME -r <commit id>` before it. No shell (`bash -c`), interpreter, `env`, `sudo`, `xargs`, alias, `;` or variable on such a line. Leave `.git`, `.jj`, git's and jj's config, the hook files and the agent settings alone: the user edits those. When the gate says to fetch first, run `jj git fetch` and try again.
 
 The gate acts once the project's `pipeline.config.json` is committed on the remote trunk, and reads its push, CI, review and deploy keys only from there.
 

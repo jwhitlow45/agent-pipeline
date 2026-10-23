@@ -18,3 +18,5 @@ pipeline exec -- jj git push --bookmark ci/<run>
 ```
 
 When the gate refuses, do the missing stage and run the command again. Never reword a command to get past the gate. When the gate is wrong, or it refuses for missing review or a production deploy, tell the user.
+
+Write every jj, git, gh and deploy command in plain form: commands joined by `&&`, every word written out, a `cd <folder>` only first, and at most one push, deploy, merge or API write per line, placed last. No shell (`bash -c`), interpreter, `env`, `xargs`, alias or variable on such a line. Codex does not block a call when a hook fails, and a shell session keeps functions and aliases between calls that the gate never sees, so define none that run jj, git or gh.

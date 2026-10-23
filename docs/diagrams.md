@@ -199,10 +199,16 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    cmd["jj git push or git push"] --> config{"pipeline.config.json committed on the remote trunk?"}
+    cmd["jj git push or git push"] --> plain{"Plain form: joined by &&, every word written out, the push last, only reads and a bookmark set before it?"}
+    plain -->|"no"| refuse["Refused, with the reason and the plain form"]
+    plain -->|"yes"| remote["Read the remote itself: git ls-remote of where the push really goes, and the config committed at its trunk"]
+    remote --> config{"pipeline.config.json committed there?"}
+    config -->|"no, and the repository is registered"| refuse
     config -->|"no"| allow["Allowed"]
-    config -->|"yes"| form{"Every ref it moves resolved exactly, no force or no-verify, to origin, nothing earlier on the line that changes them?"}
-    form -->|"no"| refuse["Refused, with the reason and the plain form"]
+    config -->|"yes"| trust{"jj and git agree with the remote, and no alias changes the gate's reads?"}
+    trust -->|"no"| refuse
+    trust -->|"yes"| form{"Every ref it moves resolved exactly, no force or no-verify, to origin, no working copy?"}
+    form -->|"no"| refuse
     form -->|"yes"| each["For each ref it moves"]
     each --> trunk{"B is trunk?"}
     trunk -->|"yes"| runby{"deploy.runBy is user?"}

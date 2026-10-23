@@ -37,37 +37,49 @@ Or from a shell: `claude plugin marketplace add jwhitlow45/agent-pipeline`, then
 The plugin brings:
 
 - the `agent-pipeline` skill, which teaches the process and the commands
-- a PreToolUse hook that runs `pipeline gate`, and a PostToolUse hook that runs `pipeline mirror-hook`, on every tool that runs a command: Bash, Monitor and PowerShell
+- a PreToolUse hook that runs `pipeline gate` before every tool that runs a command or edits a file: Bash, Monitor, PowerShell, Edit, Write, MultiEdit and NotebookEdit
+- a PostToolUse hook that runs `pipeline mirror-hook` after Bash, Monitor and PowerShell
 - `bin/pipeline` on the Bash tool's PATH while the plugin is enabled.
 
-Both hooks act only in repositories whose remote trunk has a committed `pipeline.config.json`, and they return at once for commands that are not pushes, gh calls, review commands or a deploy command. The gate does not read PowerShell: a PowerShell command that mentions a push, gh or a deploy command is refused, with the advice to run it through Bash.
+Both hooks set `"onFailure": "block"`, which needs Claude Code 2.1.295 or later. Without it, a hook that times out lets the tool call run. The gate also keeps to a deadline of 60 seconds, under the hook's 90, and every process it starts gets only the time left: a slow remote or a slow GitHub refuses with "ran out of time" instead of timing out.
+
+Both hooks act only in repositories whose remote trunk has a committed `pipeline.config.json`. The gate reads each command line without running anything:
+
+- **Which lines it gates.** A line that runs or names jj, git, gh or agent-review, sends curl or wget to GitHub, or runs a deploy script. A word that only appears as text for `echo`, `printf`, `grep` or `man` does not count, unless that output feeds a program.
+- **The plain form.** A gated line passes only as simple commands joined by `&&`, with every word written out. A `cd <folder>` may come first, on its own. A pipe may lead only into `head`, `tail`, `grep`, `wc`, `sort`, `cut`, `tr`, `cat`, `tee <file>`, `jq`, `column`, `uniq` or `nl`. The wrappers it reads are `timeout <duration>` and `caffeinate` with only `-d`, `-i`, `-m`, `-s` and `-u`.
+- **One action, placed last.** A push, a deploy, a merge, a dispatch, an API write or a review start comes last on its line. Before it only reads, the leading `cd` and `jj bookmark set|create|move NAME -r <commit id>` may run. Run anything else on its own first.
+- **Exact commands.** jj, git and gh are read with their own grammar, flag by flag: an unknown option, an alias, `-c`, `--config`, a shell, an interpreter, any other wrapper, `;`, `||`, a subshell or a word built at run time is refused there, and the refusal names the plain form to run.
+- **On every line.** A command whose name is built at run time (`$CMD`, `eval "$X"`, `sh -c "$X"`) is refused, and so is any write into a `.git` or `.jj` folder, git's or jj's config, the hook files, Claude Code's or Codex's settings, or the pipeline's ledger, by a redirection, `tee`, `cp`, `mv`, `ln` or another program, or by Edit and Write.
+
+The gate does not read PowerShell: a PowerShell command that names jj, git, gh, agent-review or a deploy is refused, with the advice to run it through Bash.
 
 Without the plugin, add the same hooks to `~/.claude/settings.json` (or a project's `.claude/settings.json`) by hand:
 
 ```json
 {
   "hooks": {
-    "PreToolUse": [{ "matcher": "Bash|Monitor|PowerShell", "hooks": [{ "type": "command", "command": "~/.local/bin/pipeline gate", "timeout": 90 }] }],
-    "PostToolUse": [{ "matcher": "Bash|Monitor|PowerShell", "hooks": [{ "type": "command", "command": "~/.local/bin/pipeline mirror-hook", "timeout": 90 }] }]
+    "PreToolUse": [{ "matcher": "Bash|Monitor|PowerShell|Edit|Write|MultiEdit|NotebookEdit", "hooks": [{ "type": "command", "command": "~/.local/bin/pipeline gate", "timeout": 90, "onFailure": "block" }] }],
+    "PostToolUse": [{ "matcher": "Bash|Monitor|PowerShell", "hooks": [{ "type": "command", "command": "~/.local/bin/pipeline mirror-hook", "timeout": 90, "onFailure": "block" }] }]
   }
 }
 ```
 
 Quote the path in `command` when it holds a space or a quote.
 
-The gate blocks with exit code 2 and its reason on stderr. Any failure while it checks a command blocks too, with exit code 2 and the cause: letting a push or deploy through unchecked is worse than a retry. A command the gate cannot resolve to an exact action (a variable command name, xargs, a shell reading a pipe) is refused when it holds a push, a gh call or a deploy command, and the reason names the plain form to run instead.
+The gate blocks with exit code 2 and its reason on stderr. Any failure while it checks a command blocks too, with exit code 2 and the cause: letting a push or deploy through unchecked is worse than a retry.
 
 ## 3. Codex
 
 - **Instructions:** copy [codex/AGENTS-section.md](../codex/AGENTS-section.md) into `~/.codex/AGENTS.md` or the project's `AGENTS.md`.
 - **Skill:** `install.sh --codex` links `skills/agent-pipeline` into `~/.codex/skills/`.
-- **Hooks:** Codex reads Claude-style hooks from `~/.codex/hooks.json` or a project's `.codex/hooks.json`. [codex/hooks.json](../codex/hooks.json) is the template, with `PIPELINE_BIN` standing for the CLI's path (`install.sh --codex` fills it in, shell-quoted). Codex asks you to trust a new hook the first time it runs. Codex names its shell tool `Bash` in hook input, and the matcher also names the older shell tool names.
+- **Hooks:** Codex reads Claude-style hooks from `~/.codex/hooks.json` or a project's `.codex/hooks.json`. [codex/hooks.json](../codex/hooks.json) is the template, with `PIPELINE_BIN` standing for the CLI's path (`install.sh --codex` fills it in, shell-quoted). Codex asks you to trust a new hook the first time it runs. Codex names its shell tool `Bash` in hook input, and the matcher also names the older shell tool names. Codex's managed hooks do not block a call when the hook itself fails or times out, so the gate's own 60-second deadline is what keeps a slow check from letting a command through. A crash of the hook process still lets it run there.
+- **A persistent shell:** a Codex shell session keeps variables, functions and aliases between calls. The gate reads each call on its own and never sees them, so a function defined in one call can run a push in the next. See [what the gate is not](#what-the-gate-is-not).
 - **Without hooks:** run every push, deploy and review command through the gate: `pipeline exec -- jj git push --bookmark ci/x`. `exec` runs the gate, then the command, then the mirror.
 
 ## 4. Any other agent, or a person
 
 - `pipeline exec -- <command>` gives the gate and the mirror without hooks.
-- `git-hooks/pre-push` runs the push checks for `git push` in a colocated repository: `ln -s ~/src/agent-pipeline/git-hooks/pre-push .git/hooks/pre-push`. jj does not run git hooks, so a `jj git push` is checked only by the agent hooks or by `exec`.
+- `git-hooks/pre-push` runs the push checks for `git push` in a colocated repository: `ln -s ~/src/agent-pipeline/git-hooks/pre-push .git/hooks/pre-push`. git hands it the URL it pushes to and each branch's commit on the remote. It refuses a URL that is not the repository the gate reads, and a remote commit that differs from what the remote itself reported to the gate. jj does not run git hooks, so a `jj git push` is checked only by the agent hooks or by `exec`.
 
 ## 5. Set up a project
 
@@ -78,6 +90,10 @@ pipeline config --check
 ```
 
 Then fill in `pipeline.config.json` ([config.md](config.md)), commit it, and get it onto the remote trunk. The gate reads its own keys (push, CI, review trust and deploy) only from the copy committed on the remote trunk, so a repository stays ungated until that copy exists, and `pipeline config --check` says so. Put private values and paths in `pipeline.local.json`, which `init` adds to `.gitignore`: the live domain and the deploy host the scan keeps out, any other string that must never reach a public branch. A lane's workspace finds the local file in the main workspace, so it needs no copy.
+
+Declare every deploy workflow. `deploy.deployWorkflows` is a regex over a workflow's file path and display name, and defaults to `deploy`. A workflow that deploys under another name (`cd.yml`, `release.yml`) is a deploy to the gate only when its file names an `environment:`, so give it a matching name or an environment. A workflow whose path, name, environment or inputs match `deploy.prodPattern` is a production deploy, which agents never run. Under `deploy.runBy: "user"`, agents may dispatch or rerun only the workflows listed in `deploy.allowedWorkflows`, by file path, and the list is empty by default.
+
+Set the statuses from an account of their own: a bot account or a GitHub App whose token agents never hold. GitHub can then require each check from that source (see [What GitHub must enforce](#7-what-github-must-enforce)), and a status an agent sets with its own token counts for nothing.
 
 The [raccoon-vtt profile](../profiles/raccoon-vtt/) is a worked example from a real project.
 
@@ -95,13 +111,35 @@ The pipeline reads agent-review's ledger (`~/.local/state/agent-review/`, or `re
 
 For a design review, `pipeline review start --run R --topic T --no-commits --dir <folder>`.
 
-Reviews recorded on one machine reach another through GitHub: set `review.trustGithubStatus` to `true`, and a success status from `agent-review` or `pipeline/review` on the tip counts as consensus for the range up to it. Only the newest status of each context counts, and only when one of `review.trustedStatusWriters` set it (by default the repository's owner). The gate refuses an agent's `gh api` write of these statuses.
+Reviews recorded on one machine reach another through GitHub: set `review.trustGithubStatus` to `true`, and a success status from `agent-review` or `pipeline/review` on the tip counts as consensus for the range up to it. It is a range attestation from a trusted writer: only the newest status of each context counts, and only when one of `review.trustedStatusWriters` set it (by default the repository's owner). The gate refuses an agent's `gh api` write of these statuses.
 
-## 7. Branch protection
+## 7. What GitHub must enforce
 
-Each stage is a commit status, so GitHub branch protection can require them. Requiring `pipeline/scan`, `pipeline/ci` and `pipeline/review` (or `agent-review`) on pull requests into main makes GitHub enforce what the gate enforces locally. Each status describes only its own commit: when a run's tip moves, its stages show as `pending` on the new tip until they pass there.
+The gate stops the forms an agent would plausibly write. Only GitHub can make "never" hold against a script, so set these on every repository with the pipeline:
 
-Statuses are set through `gh api`, so the account the agents use needs write access to commit statuses. Anyone with that access can set any status. The gate refuses agents' writes of these contexts, but it cannot stop a person or another tool, so keep write access to the accounts you trust.
+- **A ruleset on trunk** (target `~DEFAULT_BRANCH`): require a pull request before merging, require the status checks `pipeline/scan`, `pipeline/ci` and `pipeline/review` (or `agent-review`) with the expected source set to the account or app that sets them, block force pushes, and restrict deletions.
+- **A ruleset on every branch** (target `~ALL`): block force pushes and restrict deletions, with only the user on the bypass list.
+- **A tag ruleset** (target `~ALL`): restrict creations, updates and deletions to the user. A release needs a tag, so this holds releases too.
+- **The production environment:** every production deploy workflow runs in an environment whose name matches `deploy.prodPattern`, with the user as a required reviewer and self-review prevented.
+- **Agent tokens:** write access at most, never admin, on no ruleset's bypass list, and without the Administration, Environments or Secrets permissions.
+
+`pipeline doctor` reads these settings with `gh api` and names each one that is missing, with how to add it. It changes nothing.
+
+Each stage is a commit status, so these checks can require them. Each status describes only its own commit: when a run's tip moves, its stages show as `pending` on the new tip until they pass there. Anyone with write access to commit statuses can set any status, which is why each required check names its source.
+
+## What the gate is not
+
+The gate refuses what an agent would plausibly write, and anything it cannot read on a line that names a gated tool. It checks each action against the remote itself: one `git ls-remote` of the address a push really reaches, after `pushurl`, `insteadOf` and `pushInsteadOf`, and the config committed at the trunk commit the remote reports. jj's and git's record of the remote must agree with it, or the gate says to fetch first. It refuses to act while a jj alias redefines a function, keyword or id the gate's reads use.
+
+It is not a sandbox. These still run unseen:
+
+- a script the agent wrote and ran, `make`, `npm run` or another build tool
+- a changed copy of the deploy script, which is a new script to the gate
+- a function, alias or variable a persistent Codex shell kept from an earlier call
+- a program earlier on PATH than git, jj or gh
+- a workflow that starts on a comment, a label or a push to a `ci/*` branch, which the gate never sees as a deploy
+
+The settings above are what holds then.
 
 ## 8. Where state lives
 
@@ -109,7 +147,7 @@ Statuses are set through `gh api`, so the account the agents use needs write acc
 - Check logs: `~/.local/state/agent-pipeline/logs/<run>/<lane>/<tip>/`.
 - The builtin review ledger: `~/.local/state/agent-pipeline/reviews/`.
 - The follow-up backlog: `~/.local/state/agent-pipeline/followups/`, one file per repository.
-- The repositories with a committed config: `~/.local/state/agent-pipeline/repos.json`, which pipeline commands keep current. The gate reads it to find a deploy command run from any folder.
+- The repositories with a committed config: `~/.local/state/agent-pipeline/repos.json`, which pipeline commands keep current. Each entry holds the repository's jj store, its remote and trunk, its deploy pattern, and every deploy script its `deploy.command` has named, by real path and content hash. The gate binds a deploy script run from any folder to its own repository by these, and refuses a script two repositories share. A registered repository whose committed config disappears from trunk is refused, never left ungated. When the file cannot be read, the gate refuses only the lines it would gate, and says so. Repair it in a terminal outside the agent, since the gate refuses an agent's write there: delete it, and the next pipeline command in each project writes it again.
 - Each state file is written under a lock beside it (`<file>.lock`), which a process that died leaves behind for the next one to clear.
 - The decision log: wherever `decisions.file` says, outside the repository when the repository is public.
 
