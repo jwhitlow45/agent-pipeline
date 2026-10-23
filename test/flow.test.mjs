@@ -261,6 +261,15 @@ describe('scan, push, CI, review and deploy', () => {
     assert.equal(box.run('dark').ci[tip].runId, 77);
   });
 
+  test('CI records only a run of ci.workflow on the exact commit, in this repository', () => {
+    const view = (id, fields) => ({ match: `run view ${id}`, stdout: { databaseId: id, status: 'completed', conclusion: 'success', url: `https://github.com/${SLUG}/actions/runs/${id}`, headSha: tip, workflowName: 'CI', jobs: [], ...fields } });
+    box.ghScript([view(78, { headSha: 'f'.repeat(40) }), view(79, { workflowName: 'Lint' }), view(80, { url: 'https://github.com/other-owner/other/actions/runs/80' })]);
+    assert.match(box.cli(['ci', '--run', 'dark', '--run-id', '78']).err, /ran on ffffffffffff, not/);
+    assert.match(box.cli(['ci', '--run', 'dark', '--run-id', '79']).err, /run of Lint, which is not in ci.workflow/);
+    assert.match(box.cli(['ci', '--run', 'dark', '--run-id', '80']).err, /is not in example-owner\/demo/);
+    box.ghScript([]);
+  });
+
   test('deploy is refused until code review reaches consensus on every commit', () => {
     const refused = box.cli(['deploy', 'check', '--run', 'dark']);
     assert.equal(refused.code, 1);
@@ -481,5 +490,15 @@ describe('the scan reads each commit on its own', () => {
     assert.equal(result.code, 1);
     assert.match(result.out, /error private [0-9a-f]{12} notes.md:1: a string from scan.private/);
     assert.ok(!result.all.includes('secret-host.example'));
+  });
+});
+
+describe('CI without a designated workflow', () => {
+  const box = sandbox({ config: { ...baseConfig, ci: { workflow: null } } });
+  after(() => box.cleanup());
+
+  test('pipeline ci refuses to count any run', () => {
+    box.cli(['intake', '--run', 'noci', '--kind', 'fast', '--words', WORDS]);
+    assert.match(box.cli(['ci', '--run', 'noci']).err, /Set ci.workflow/);
   });
 });

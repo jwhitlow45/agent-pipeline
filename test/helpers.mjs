@@ -121,5 +121,5 @@ export function builtRun(box, { run = 'dark', lane = 'a' } = {}) {
 
 export const ciScript = (tip, { jobs = [{ name: 'e2e (1)', status: 'completed', conclusion: 'success' }], conclusion = 'success' } = {}) => [
   { match: 'run list', stdout: [{ databaseId: 77, status: 'completed', conclusion, workflowName: 'CI', headSha: tip, url: `https://github.com/${SLUG}/actions/runs/77`, createdAt: '2026-01-01T00:00:00Z' }] },
-  { match: 'run view 77', stdout: { databaseId: 77, status: 'completed', conclusion, url: `https://github.com/${SLUG}/actions/runs/77`, headSha: tip, jobs } },
+  { match: 'run view 77', stdout: { databaseId: 77, status: 'completed', conclusion, url: `https://github.com/${SLUG}/actions/runs/77`, headSha: tip, workflowName: 'CI', jobs } },
 ];
