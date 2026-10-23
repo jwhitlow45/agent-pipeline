@@ -1397,3 +1397,44 @@ describe('names found the way the shell finds them (round 5)', () => {
     ['repo', 'Get-Content notes.txt', 0, null, { tool_name: 'PowerShell' }],
   ]);
 });
+
+// Round 6: the three rules, on the forms the reviewers reported (PA-70 to PA-78, R6-1 to R6-3).
+describe('nested scripts, one resolver and shell state (round 6)', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user' } } });
+  after(() => box.cleanup());
+  box.write('deploy.sh', '#!/bin/sh\necho deploying "$@"\n');
+  // real holds the deploy script as rollout. plain holds a harmless rollout, and links a link to curl.
+  box.sh('chmod +x deploy.sh && mkdir -p ../real ../plain ../links && cp deploy.sh ../real/rollout && printf "#!/bin/sh\\necho hi\\n" > ../plain/rollout && chmod +x ../plain/rollout && printf "x\\n" > rollout && ln -s /usr/bin/curl ../links/fetcher');
+  box.cli(['config', '--check']);
+  const base = box.env.PATH;
+  const values = { repo: box.repo, root: box.root, plain: join(box.root, 'plain'), real: join(box.root, 'real') };
+  const nine = 'command '.repeat(9);
+  runRows(box, values, [
+    // Rule 1: a nested script is read exactly, from the one input the shell reads, or refused.
+    ['repo', "bash -o pipefail <<'EOF'\ncurl -K cfg\nEOF", 2, /\(-K\)/],
+    ['repo', "bash <<< 'echo safe' <<< 'curl -K cfg'", 2, /more than one input/],
+    ['repo', "printf 'curl \\x2dK cfg' | sh", 2, /reads its script from a pipe/],
+    ['repo', "printf '\\143url -K cfg' | sh", 2, /reads its script from a pipe/],
+    ['repo', "echo -n -n 'curl -K cfg' | sh", 2, /reads its script from a pipe/],
+    ['repo', "cat <<'EOF' | sh\ncurl -K cfg\nEOF", 2, /reads its script from a pipe/],
+    ['repo', "find . -maxdepth 0 -exec sh -c 'curl -K cfg' \;", 2, /\(-K\)/],
+    ['repo', "watch -n 5 'ls -la'", 0],
+    // Rule 2: every command word is found as the shell finds it, and its real file is what counts.
+    { name: 'a link named fetcher to curl on PATH', setup: (b) => { b.env.PATH = `${join(b.root, 'links')}:${base}`; } },
+    ['repo', 'fetcher -K cfg', 2, /\(-K\)/],
+    ['repo', '/usr/bin/curl -K cfg', 2, /\(-K\)/],
+    { name: 'the usual PATH', setup: (b) => { b.env.PATH = base; } },
+    ['repo', "env PATH=%real%:/usr/bin:/bin sh -c 'echo ready; rollout batch abc'", 2, /through sh, which the gate does not read/],
+    ['repo', 'PATH=%real%:/usr/bin:/bin command rollout batch abc', 2, /names the deploy script through command|sets PATH for the command/],
+    ['repo', "PATH=$(pwd)/bin /bin/bash -c 'echo safe'", 0],
+    ['repo', 'env -- PATH=/usr/bin /bin/ls', 0],
+    ['repo', 'jj --version', 0],
+    ['repo', 'command -v jj', 0],
+    ['repo', 'type jj', 0],
+    // Rule 3: cd through command and builtin moves the folder later words are found from, and a
+    // runner chain longer than the gate reads refuses.
+    ['plain', 'command cd %real% && ./rollout b1 main', 2, /runs before|The user runs deploys/],
+    ['plain', 'builtin cd %real% && ./rollout b1 main', 2, /runs before|The user runs deploys/],
+    ['repo', `${nine}curl -K cfg`, 2, /more than 8 runners/],
+  ]);
+});
