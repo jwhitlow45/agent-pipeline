@@ -684,3 +684,18 @@ describe('a live-hole run with a commit no lane made', () => {
     assert.match(box.gate('jj git push -b ci/copy', box.repo).err, /Run dark fixes a hole that is live on the deployed server/);
   });
 });
+
+describe('the scan reads commits whatever bytes they hold', () => {
+  const box = sandbox({ config: baseConfig, local: { scan: { private: ['secret-host.example'] } } });
+  after(() => box.cleanup());
+
+  test('a byte that once split records hides nothing: a private string after it is still found', () => {
+    const { ws } = builtRun(box);
+    box.commit('docs: a framed note', { 'framed.md': 'start\x1e\x1f then secret-host.example\n' }, ws);
+    box.commit('docs: a framed message \x1e secret-host.example', {}, ws);
+    const result = box.cli(['scan', '--run', 'dark', '--tip', '@-'], { cwd: ws });
+    assert.equal(result.code, 1);
+    assert.match(result.out, /error private [0-9a-f]{12} framed.md:1: a string from scan.private/);
+    assert.match(result.out, /error private [0-9a-f]{12} message: a string from scan.private/);
+  });
+});
