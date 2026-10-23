@@ -512,6 +512,26 @@ describe('hooks for agents without them', () => {
     assert.equal(box.sh(`git --git-dir=${JSON.stringify(box.bare)} branch --list ci/hooked`).trim(), '');
   });
 
+  test('the git pre-push hook refuses when the local view of the remote is stale', () => {
+    const sha = box.sh('jj log --no-graph -r @- -T commit_id').trim();
+    box.sh(`git update-ref refs/remotes/origin/ci/fake ${sha}`);
+    try {
+      const result = box.cli(['git-pre-push', '--remote', 'origin'], { input: `refs/heads/ci/x ${sha} refs/heads/ci/x ${'0'.repeat(40)}\n` });
+      assert.equal(result.code, 1);
+      assert.match(result.err, /differs from what origin holds\. Run jj git fetch/);
+    } finally {
+      box.sh('git update-ref -d refs/remotes/origin/ci/fake');
+    }
+  });
+
+  test('the git pre-push hook refuses when git and the remote disagree on the branch tip', () => {
+    const sha = box.sh('jj log --no-graph -r @- -T commit_id').trim();
+    const main = box.sh('jj log --no-graph -r main@origin -T commit_id').trim();
+    const result = box.cli(['git-pre-push', '--remote', 'origin'], { input: `refs/heads/ci/x ${sha} refs/heads/ci/x ${main}\n` });
+    assert.equal(result.code, 1);
+    assert.match(result.err, /ci\/x: git says origin has [0-9a-f]{12}, but the remote reported nothing to the gate\. Fetch first/);
+  });
+
   test('a repository without a pipeline config is never gated', () => {
     box.sh('mkdir -p ../plain && cd ../plain && jj git init --colocate >/dev/null 2>&1');
     assert.equal(box.gate('jj git push --all', join(box.root, 'plain')).code, 0);
@@ -767,6 +787,13 @@ describe('a live-hole run across a rebase', () => {
 
   test('keeps trunk private too: moving main before the deploy is publishing the hole', () => {
     assert.match(box.gate(`jj bookmark set main -r ${moved} && jj git push -b main`, box.repo).err, LIVE);
+    assert.match(box.gate(`git push origin ${moved}:refs/heads/main`, box.repo).err, LIVE);
+  });
+
+  test('keeps a merge into trunk private too, from a branch or a pull request', () => {
+    box.ghScript([{ match: 'pr view 7 ', stdout: { baseRefName: 'main', headRefName: 'ci/hole', headRefOid: moved, isDraft: false } }]);
+    assert.match(box.gate('gh pr merge 7 --squash', box.repo).err, LIVE);
+    assert.match(box.gate('gh pr merge 7 --auto', box.repo).err, LIVE);
   });
 });
 
