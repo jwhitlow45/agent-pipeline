@@ -27,7 +27,7 @@ The process has two halves. The judgment half is people and agents deciding thin
 
 ## What the tool enforces, and what it cannot
 
-The gate refuses the forms an agent would plausibly write: a push, a deploy, a merge or a dispatch whose earlier stages have not passed, in any spelling it can read, and anything it cannot read on a line that names one. It checks each action against the remote itself and the config committed on the remote's trunk, never against local refs or settings an agent could change.
+The gate refuses the forms an agent would plausibly write: a push, a deploy, a merge or a dispatch whose earlier stages have not passed, in any spelling it can read, and any line it cannot read or prove safe. It checks each action against the remote itself and the config committed on the remote's trunk, never against local refs or settings an agent could change.
 
 It is not a sandbox. An agent can still write a script and run it, run a build tool, or use a shell function a persistent shell kept from an earlier call, and the gate sees none of what those do. So every "never" in this process (never force push, never move trunk without a deploy check, never run a production deploy) also rests on GitHub: rulesets on every branch and tag, required checks from an identity agents cannot use, required reviewers on the production environment, and agent tokens without the rights to bypass them. [integration.md](integration.md) lists the exact settings, and `pipeline doctor` checks them.
 
