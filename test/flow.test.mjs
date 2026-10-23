@@ -2,9 +2,11 @@
 
 import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
-import { baseConfig, builtRun, ciScript, sandbox, SLUG, WORDS } from './helpers.mjs';
+import { baseConfig, builtRun, ciScript, CLI, sandbox, SLUG, WORDS } from './helpers.mjs';
 
 describe('intake, briefs and design', () => {
   const box = sandbox({ config: { ...baseConfig, brief: { preamble: 'agent-preamble.md' }, design: { requiredSections: ['Tests'] }, review: { provider: 'agent-review' } } });
@@ -700,5 +702,32 @@ describe('the scan reads commits whatever bytes they hold', () => {
     assert.equal(result.code, 1);
     assert.match(result.out, /error private [0-9a-f]{12} framed.md:1: a string from scan.private/);
     assert.match(result.out, /error private [0-9a-f]{12} message: a string from scan.private/);
+  });
+});
+
+describe('a build recorded while the lane moves', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+
+  test('is judged on the run as it is under the lock, not as it was read before', async () => {
+    const { ws } = builtRun(box);
+    const later = box.commit('fix(ui): a later change no check saw', { 'src/theme.mjs': 'export const dark = () => !false;\n' }, ws);
+    // Hold the run's lock, as a pipeline commits in another process would, while the build reads the run.
+    const runFile = join(box.env.AGENT_PIPELINE_STATE, 'runs', 'dark.json');
+    mkdirSync(`${runFile}.lock`);
+    writeFileSync(join(`${runFile}.lock`, 'owner.json'), JSON.stringify({ token: 'test', pid: process.pid, host: hostname() }));
+    const child = spawn(process.execPath, [CLI, 'build', '--run', 'dark'], { cwd: box.repo, env: box.env });
+    let out = '';
+    child.stdout.on('data', (chunk) => { out += chunk; });
+    const exited = new Promise((done) => child.on('exit', done));
+    await new Promise((done) => setTimeout(done, 1500));
+    const run = JSON.parse(readFileSync(runFile, 'utf8'));
+    Object.assign(run.lanes.a, { tip: later });
+    run.tip = later;
+    writeFileSync(runFile, JSON.stringify(run));
+    rmSync(`${runFile}.lock`, { recursive: true });
+    assert.equal(await exited, 1, out);
+    assert.match(out, /Build for dark: in-progress/);
+    assert.equal(box.run('dark').stages.build.state, 'in-progress');
   });
 });
