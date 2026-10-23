@@ -7,6 +7,7 @@
 import { parseArgs } from 'node:util';
 import { cmdDocs, cmdFollowup, cmdLivePlay } from '../lib/after.mjs';
 import { cmdBuild, cmdCheck, cmdCommits, cmdIntegrate, cmdLane, cmdMutation, cmdReport } from '../lib/build.mjs';
+import { cmdDoctor } from '../lib/doctor.mjs';
 import { cmdExec, cmdGate, cmdGitPrePush, cmdMirrorHook } from '../lib/hooks.mjs';
 import { cmdBrief, cmdDecide, cmdDecisions, cmdDesign, cmdIntake, cmdSignoff, cmdSpec } from '../lib/plan.mjs';
 import { cmdAbandon, cmdCi, cmdCleanup, cmdDeploy, cmdNotify, cmdPush, cmdRebase, cmdReview, cmdScan } from '../lib/ship.mjs';
@@ -66,14 +67,15 @@ Hooks
   gate                                                PreToolUse hook: refuses a step whose earlier stages have not passed
   mirror-hook                                         PostToolUse hook: records pushes and mirrors statuses
   exec -- <command...>                                The gate, the command, then the mirror, for agents without hooks
-  git-pre-push [--remote NAME]                        The push checks, from a git pre-push hook
+  git-pre-push [--remote NAME] [--url URL]            The push checks, from a git pre-push hook
+  doctor                                              Reports which GitHub settings that back the gate are missing
 
 Ledger: ${stateDir()}`;
 
 const STRINGS = ['run', 'words', 'words-file', 'kind', 'by', 'from', 'file', 'lane', 'decisions', 'note', 'review-topic', 'review-skip', 'allow-long', 'id', 'chose', 'why', 'rejected', 'title',
   'stage', 'item', 'workspace', 'name', 'owns', 'brief', 'base', 'db', 'env', 'tip', 'e2e', 'only', 'record', 'exit', 'log', 'commit', 'test', 'cmd', 'manual', 'ack', 'bookmark', 'run-id',
   'topic', 'dir', 'reviewers', 'reason', 'prev', 'shipped', 'backup', 'health', 'load', 'http', 'restarts', 'logs', 'ungated', 'event', 'message', 'prefix', 'deployed', 'severity', 'area',
-  'summary', 'status', 'recommend', 'report', 'decision', 'followup', 'source', 'text', 'files', 'ids', 'lanes', 'repo', 'config', 'remote', 'failed'];
+  'summary', 'status', 'recommend', 'report', 'decision', 'followup', 'source', 'text', 'files', 'ids', 'lanes', 'repo', 'config', 'remote', 'failed', 'url'];
 const BOOLEANS = ['ui', 'no-ui', 'live-hole', 're-review', 'extra', 'dry-run', 'next-name', 'wait', 'no-commits', 'no-notify', 'json', 'all', 'check', 'open', 'apply', 'due', 'help'];
 const OPTIONS = {
   ...Object.fromEntries(STRINGS.map((name) => [name, { type: 'string' }])),
@@ -86,7 +88,7 @@ const COMMANDS = {
   init: cmdInit, config: cmdConfig, intake: cmdIntake, brief: cmdBrief, design: cmdDesign, spec: cmdSpec, decide: cmdDecide, decisions: cmdDecisions, signoff: cmdSignoff,
   lane: cmdLane, commits: cmdCommits, integrate: cmdIntegrate, check: cmdCheck, mutation: cmdMutation, report: cmdReport, build: cmdBuild,
   scan: cmdScan, push: cmdPush, ci: cmdCi, rebase: cmdRebase, notify: cmdNotify, cleanup: cmdCleanup, abandon: cmdAbandon, docs: cmdDocs,
-  status: cmdStatus, mirror: cmdMirror, gate: cmdGate, 'mirror-hook': cmdMirrorHook, 'git-pre-push': cmdGitPrePush,
+  status: cmdStatus, mirror: cmdMirror, gate: cmdGate, 'mirror-hook': cmdMirrorHook, 'git-pre-push': cmdGitPrePush, doctor: cmdDoctor,
 };
 const SUBCOMMANDS = { review: cmdReview, deploy: cmdDeploy, 'live-play': cmdLivePlay, followup: cmdFollowup };
 

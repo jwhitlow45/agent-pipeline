@@ -1,14 +1,15 @@
 {
-  "description": "agent-pipeline: the gate refuses a shell command whose earlier stages have not passed, and the mirror records pushes and sets pipeline/<stage> statuses. Both act only in repositories with a pipeline.config.json.",
+  "description": "agent-pipeline: the gate refuses a tool call whose earlier stages have not passed, or that edits the files steering git, jj or the gate, and the mirror records pushes and sets pipeline/<stage> statuses. Both act only in repositories with a pipeline.config.json. onFailure needs Claude Code 2.1.295 or later.",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash|Monitor|PowerShell",
+        "matcher": "Bash|Monitor|PowerShell|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/pipeline gate",
-            "timeout": 90
+            "timeout": 90,
+            "onFailure": "block"
           }
         ]
       }
@@ -20,7 +21,8 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}\"/bin/pipeline mirror-hook",
-            "timeout": 90
+            "timeout": 90,
+            "onFailure": "block"
           }
         ]
       }

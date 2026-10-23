@@ -3,10 +3,10 @@
 # jj git push does not run git hooks, so jj pushes rely on the agent's PreToolUse hook or on
 # `pipeline exec -- jj git push ...`.
 # Install: ln -s <agent-pipeline>/git-hooks/pre-push .git/hooks/pre-push (install.sh --project does it).
-# git passes the remote name as $1 and the refs on stdin.
+# git passes the remote name as $1, the URL it pushes to as $2, and the refs on stdin.
 self=$0
 while [ -L "$self" ]; do
   link=$(readlink "$self")
   case $link in /*) self=$link ;; *) self=$(dirname "$self")/$link ;; esac
 done
-exec "$(dirname "$self")/../bin/pipeline" git-pre-push --remote "$1"
+exec "$(dirname "$self")/../bin/pipeline" git-pre-push --remote "$1" --url "$2"
