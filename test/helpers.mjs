@@ -99,8 +99,8 @@ export const baseConfig = {
 };
 
 // A fast run built to the point of a pushed, scanned tip, shared by the tests that start there.
-export function builtRun(box, { run = 'dark', lane = 'a' } = {}) {
-  box.cli(['intake', '--run', run, '--kind', 'fast', '--words', WORDS]);
+export function builtRun(box, { run = 'dark', lane = 'a', intake = [] } = {}) {
+  box.cli(['intake', '--run', run, '--kind', 'fast', '--words', WORDS, ...intake]);
   box.write(`../${run}-spec.md`, `The user's words: ${WORDS}\n`);
   box.cli(['spec', '--run', run, '--file', `../${run}-spec.md`]);
   const ws = join(box.root, `demo-${run}`);

@@ -574,3 +574,44 @@ describe('several lanes integrate into one tip', () => {
   });
 });
 
+describe('a fix for a hole live on the server', () => {
+  // The lane runs e2e file a only. Deploying without CI needs b too, on the exact tip.
+  const checks = { parallel: [{ name: 'unit', run: 'echo "# pass 3"' }], e2e: { command: 'echo "# pass 1 {file}"', files: ['a', 'b'], always: ['a'] }, keepAwake: false };
+  const box = sandbox({ config: { ...baseConfig, push: { public: true }, checks }, local: { scan: { private: ['private-host.example'] } } });
+  after(() => box.cleanup());
+  let ws;
+  let tip;
+
+  test('stays off the public remote, by id, by patch-id and by ancestry', () => {
+    ({ ws, tip } = builtRun(box, { intake: ['--live-hole'] }));
+    assert.equal(box.cli(['scan', '--run', 'dark'], { cwd: ws }).code, 0);
+    const LIVE = /fixes a hole that is live on the deployed server/;
+    assert.match(box.gate('jj bookmark set ci/hole -r @- && jj git push -b ci/hole', ws).err, LIVE);
+    // A copy of the fix has new commit ids and the same patch-ids, and a merge carries the fix itself.
+    box.sh(`jj duplicate ${tip} -d main`, ws);
+    const copy = box.sh(`jj log --no-graph -r 'children(main) & description(substring:"docs: dark mode") ~ ${tip}' -T commit_id`, ws).trim();
+    box.sh(`jj bookmark set ci/copy -r ${copy}`, ws);
+    box.cli(['scan', '--run', 'dark', '--tip', copy], { cwd: ws });
+    assert.match(box.gate('jj git push -b ci/copy', ws).err, LIVE);
+    box.sh(`jj new ${tip} main -m "chore: merge" && jj new`, ws);
+    assert.match(box.gate(`jj bookmark set ci/merge -r @- && jj git push -b ci/merge`, ws).err, LIVE);
+    box.sh(`jj edit ${tip} && jj new`, ws);
+  });
+
+  test('deploys on every local check on the exact tip, in place of CI', () => {
+    assert.match(box.cli(['ci', '--run', 'dark']).err, /deploys on local checks in place of CI/);
+    box.cli(['review', 'skip', '--run', 'dark', '--reason', 'the user said to skip review for this test']);
+    const before = box.cli(['deploy', 'check', '--run', 'dark']);
+    assert.equal(before.code, 1);
+    assert.match(before.out, /deploys on local checks in place of CI.*e2e:b has not run/);
+    assert.doesNotMatch(before.out, /No CI result/);
+    const checked = box.cli(['check', '--run', 'dark', '--tip', tip, '--workspace', ws]);
+    assert.equal(checked.code, 0, checked.all);
+    const ready = box.cli(['deploy', 'check', '--run', 'dark']);
+    assert.equal(ready.code, 0, ready.all);
+    const recorded = box.cli(['deploy', 'record', '--run', 'dark', '--name', 'hole', '--shipped', 'the fix', '--backup', 'b', '--health', 'healthy', '--load', '1/1', '--http', '200'], { extra: { NOTES: join(box.root, 'n.txt') } });
+    assert.equal(recorded.code, 0, recorded.all);
+    assert.equal(box.gate('jj bookmark set ci/hole -r @- && jj git push -b ci/hole', ws).code, 0);
+  });
+});
+
