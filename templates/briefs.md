@@ -19,12 +19,12 @@ The owner's words (<date>): "<the user's words, verbatim>"
 
 ## Rules
 - <data, protocol and version rules from the note>
-- Feature list and guide changes only in the last commit.
-- New keys or key-plus-pointer combinations go in <shortcut registry> and the feature list together.
+- Feature list and user docs changes only in the last commit.
+- A change to <docs.shortcutSources files> updates <docs.shortcutDocs files> in the same lane. Delete this line when the project has none.
 - Grep each commit for local paths before committing.
 
 ## Checks
-typecheck, unit and build in parallel (read every log in full), then integration, then e2e one file at a time: <touched files>, <always-run files>. Use <port> only. Close every browser between files.
+typecheck, unit and build in parallel (read every log in full), then integration, then e2e one file at a time: <touched files>, <always-run files>. Use <port> only. Stop every browser, server or client an e2e file started before the next one.
 
 ## Workspace
 <workspace path>, an empty working copy on <base>. Databases <names>, dropped at the end. Never push, move bookmarks or send notifications. Asking the owner is off: decide by the note, and report anything it does not settle with your choice.
@@ -55,21 +55,28 @@ Read <preamble> and <live play brief> first, in order.
 
 The owner's words for live play: "<the owner's words, verbatim>"
 
-- The source of truth is <feature list>, <guide> and <design notes>.
-- The deployed commit is <commit>. Workspace: <path> on it. Database <name>, ports <ports>.
+- Live play exercises a running copy of the deployed commit the way its real users or clients would, beyond the automated tests, and fixes what breaks.
+- The source of truth is <feature list>, <user docs> and <design notes>.
+- The deployed commit is <commit>. The isolated instance: workspace <path> on it, with <ports, data and credentials of its own>. Never production.
 - Known follow-ups are in <backlog>. Do not report them again.
 - Fixes stay bug fixes: no new behavior, no data shape, protocol or version change. A fix that changes documented behavior is "needs owner", with your recommendation.
 - Bug IDs: <prefix>-<AREA>-<k>, severity P0 to P3.
 
 ## Areas
 ### <area> (prefix <prefix>-<AREA>)
-<what to play, on which devices, what to check above all>
+<what to exercise and how (users in separate sessions and devices, real clients, real commands, a consumer app, a device or emulator), and what to check above all>
+
+## Checks that apply to this software
+<keep the ones that fit, delete the rest>
+- Access boundaries: record what each client receives, and check that none receives what it may not see.
+- Stored state: check that it survives a restart.
+- Shared state: check that every client sees the same result.
 
 ## Checks before you report
 typecheck, unit and build in parallel, then integration, then e2e one file at a time for each file your fixes touch, plus <files>.
 
 ## Report
-A table of every bug (ID, severity, area, one line, status: fixed with commit, or needs owner with your recommendation), what you played on which devices, what worked, and the checks with counts.
+A table of every bug (ID, severity, area, one line, status: fixed with commit, or needs owner with your recommendation), what you exercised and how, what worked, and the checks with counts.
 ```
 
 ## Follow-up lane

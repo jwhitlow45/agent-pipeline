@@ -16,6 +16,17 @@ This folder is that project's setup, scrubbed of private values:
 - **Topics.** Review topics were named for the run and the stage: `<run>design` for the design review, `<run>build` for the code review. Live play runs were numbered `LP1` to `LP14`, with bug IDs such as `LP14-RS-1` (play run, area, number).
 - **Lanes.** Each lane got a jj workspace named `openvtt-<task>` beside the main one, its own e2e port range at least 20 apart (some e2e files use the base port plus 10, 19 and 22), and its own databases (`<project>_<task>` and `<project>_<task>_e2e`), dropped at the end.
 
+## What live play and docs meant there
+
+The process defines live play for any software. For this one web app it meant:
+
+- **Who played.** A lead user (the DM) and two or three players, on phones and desktops, in separate browser sessions.
+- **How.** The way a gaming group plays, not only the happy path: interrupt flows, reload mid-action, go offline and back, undo and redo, use two devices at once.
+- **Access boundaries.** Each agent recorded what each client received and checked that nothing private (hidden tokens, the DM's notes, secret rolls) reached a player who may not see it.
+- **Where.** A local server on the deployed commit with its own ports and database, never the live site.
+
+Its docs were a feature list (`FEATURES.md`), a DM guide written in a natural guide voice with screenshots from fixture data, and a keyboard shortcut sheet: keys and key-plus-pointer combinations, kept in step with `client/state/shortcuts.ts` through `docs.shortcutSources`. A guide pass signed off `docs/guide-voice` in place of the default `docs/read-through`. Its deploys recorded a backup, health, restarts, a load check over every stored record, and a few HTTP requests.
+
 ## Rules this project added, and why
 
 Each rule came from something that went wrong once.

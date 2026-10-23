@@ -1,6 +1,8 @@
 # The delivery process
 
-This is how a coordinating agent takes a user's request to a shipped, played and documented change, with other agents doing the design, the build, the review and the play. It was worked out over a long run of feature work on one web app, and it is written here for an agent or engineer who has never seen that project.
+This is how a coordinating agent takes a user's request to a shipped, played and documented change, with other agents doing the design, the build, the review and the play. It was worked out over a long run of feature work on one project, the web app in [profiles/raccoon-vtt](../profiles/raccoon-vtt/), and it is written here for an agent or engineer who has never seen that project.
+
+Nothing in the process assumes a kind of software: a web app, an API service, a CLI, a library and a mobile app all go through the same stages. A step that applies only to some software, such as a UI and UX section, a database, user docs or screenshots, says so, and its config stays off until a project turns it on.
 
 The process has two halves. The judgment half is people and agents deciding things: what to build, whether a design is right, whether a finding blocks. The mechanical half is everything a tool can check: that a brief quotes the user, that checks ran in order and passed, that a branch was scanned before it was pushed, that CI finished on the exact commit being deployed. The `pipeline` CLI in this repository records the mechanical half in a ledger, mirrors each stage to GitHub as a commit status, and refuses a step whose earlier stages have not passed. [stages.md](stages.md) lists what each stage checks. [diagrams.md](diagrams.md) draws the flow.
 
@@ -11,7 +13,7 @@ The process has two halves. The judgment half is people and agents deciding thin
 - **Designers** write design notes.
 - **Builders** each own one lane: a set of files, one jj workspace, one brief.
 - **Reviewers** are independent and read-only. At least one is a Claude model and at least one a Codex model, so no single model's blind spots decide.
-- **Live play agents** use the deployed build the way real users would and fix what breaks.
+- **Live play agents** exercise a running copy of the deployed build the way its real users or clients would, and fix what breaks ([live play](#13-live-play)).
 
 ## Rules that hold everywhere
 
@@ -35,13 +37,13 @@ It is not a sandbox. An agent can still write a script and run it, run a build t
 
 ### 1. Intake
 
-The coordinator records the request word for word (`pipeline intake`). It notes whether the change has UI, whether it fixes a hole that is live on the server (which changes the push rules), and which kind of run it is:
+The coordinator records the request word for word (`pipeline intake`). It notes whether the change has a UI, whether it fixes a hole that is live in the deployed build (which changes the push rules), and which kind of run it is:
 
-- **feature**: anything that touches stored data, permissions, the protocol, or more than a few files. It gets a design note and a design review.
-- **fast**: a UI tweak, wording, or a change to a few files with no data, permission or protocol change. A builder works from a short written spec, and a small review batch of two reviewers checks it.
+- **feature**: anything that touches stored data, permissions, a protocol or public API, or more than a few files. It gets a design note and a design review.
+- **fast**: a small tweak, wording, or a change to a few files with no data, permission, protocol or API change. A builder works from a short written spec, and a small review batch of two reviewers checks it.
 - **hotfix**: fixes from live play or a production bug. Like fast, but its spec cites the bug IDs.
 - **followups**: a batch of backlog items that are already decided.
-- **docs**: a guide pass with new screenshots.
+- **docs**: a docs pass, which reads and reworks the user docs as a whole, with new screenshots where the software has a UI.
 
 ### 2. Design
 
@@ -63,13 +65,13 @@ The coordinator splits the work into lanes. Each lane gets:
 - **a set of files it owns**, which no other open lane owns
 - **a brief** that points at the shared preamble (the rules every agent follows), quotes the user's words, names the design sections or items, the base commit, the ports and databases it may use, the checks to run, and what to report.
 
-The builder commits one signed conventional commit per item. Feature list and guide changes go in the lane's own last commit, never mixed into code commits, since those files conflicted at almost every stacking. New e2e step labels carry a lane prefix, and a new setting goes on its own lines at the end of its group, for the same reason.
+The builder commits one signed conventional commit per item. Feature list and user docs changes go in the lane's own last commit, never mixed into code commits, since those files conflicted at almost every stacking. New e2e step labels carry a lane prefix, and a new setting goes on its own lines at the end of its group, for the same reason.
 
 Checks run in a set order and the exact results are recorded:
 
-1. typecheck, unit tests and build, side by side, each with its own log
-2. integration tests, after them, since they share the database
-3. e2e files one at a time, the files the change touches plus a small set every lane runs. The full e2e set runs once on the stacked tip, by the integration step or by CI.
+1. the independent checks, such as typecheck, unit tests and build, side by side, each with its own log
+2. integration tests, after them, since they often share state such as a database
+3. end-to-end (e2e) files, which drive the software from outside the way its users or clients do, one at a time: the files the change touches plus a small set every lane runs. The full e2e set runs once on the stacked tip, by the integration step or by CI.
 
 When an e2e file fails, diagnosis starts at once, while the rest of the run goes on. The rerun waits for the run to finish, so every failure is seen.
 
@@ -79,7 +81,7 @@ The builder ends with its report file and a short message.
 
 ### 5. Integration
 
-When several lanes build one feature, the coordinator stacks them, resolves the mechanical conflicts itself (feature list and guide conflicts are the common ones), records the stacked tip (`pipeline integrate`, which checks that it holds every lane commit), and checks it. Batches stay small: two or three features, about 25 commits. A batch goes to review as soon as its lanes land, and the next batch builds on top while it is reviewed.
+When several lanes build one feature, the coordinator stacks them, resolves the mechanical conflicts itself (feature list and user docs conflicts are the common ones), records the stacked tip (`pipeline integrate`, which checks that it holds every lane commit), and checks it. Batches stay small: two or three features, about 25 commits. A batch goes to review as soon as its lanes land, and the next batch builds on top while it is reviewed.
 
 ### 6. Pre-push scan
 
@@ -88,7 +90,7 @@ Pushing a branch to a public repository publishes it at once, and a deleted bran
 - errors that always block: an unsigned commit, an AI trailer, an em dash in a message, a private string (the live domain, the deploy host), a home folder path, a secret, an added `.env` file
 - findings someone must look at and acknowledge with a reason: URLs to hosts not on the allow list, HTML sinks (`innerHTML` and the like), credentials in a URL, workflow changes that add secrets, write permissions or a deploy.
 
-A fix for a hole that is live on the server is never pushed to a public branch before it deploys, since the branch would advertise the hole. That holds for a copy or a rebase of the fix too. Every check, every e2e file included, runs on this machine on the exact commit to deploy (`pipeline check --tip`), and stands in for CI.
+A fix for a hole that is live in the deployed build is never pushed to a public branch before it deploys, since the branch would advertise the hole. That holds for a copy or a rebase of the fix too. Every check, every e2e file included, runs on this machine on the exact commit to deploy (`pipeline check --tip`), and stands in for CI.
 
 ### 7. Push
 
@@ -96,7 +98,7 @@ Agents push only to `ci/*` branches, and only commits a passed scan covered. The
 
 ### 8. CI
 
-CI runs every check on Linux, with the e2e files in shards. Only a run of the project's designated CI workflow, on the exact commit, in the project's own repository counts, and only once every job has finished: GitHub can report a run as completed while a job is still running. The run ID and result are recorded per commit (`pipeline ci --wait`), and a later deploy needs a green run on that exact commit.
+CI runs every check, with the e2e files in shards when the set is long. Only a run of the project's designated CI workflow, on the exact commit, in the project's own repository counts, and only once every job has finished: GitHub can report a run as completed while a job is still running. The run ID and result are recorded per commit (`pipeline ci --wait`), and a later deploy needs a green run on that exact commit.
 
 ### 9. Code review
 
@@ -120,19 +122,37 @@ Before deploy, the batch is rebased onto main. A commit whose patch-id (its diff
 
 ### 11. Deploy
 
-A deploy needs code review consensus (or the user's recorded skip) on every commit it ships, a settled green CI run on the exact commit (for a live-hole fix, every local check on it), a passed scan, and the docs rules met. Moving trunk is part of the deploy: where the user runs deploys, agents never move trunk, by push or by merge. The deploy takes a database backup first, then checks that the app is healthy and has not restarted, runs the app's own load check (every stored record loads), and requests a few pages over HTTP. The results are recorded (`pipeline deploy record`), and a notification names what shipped. A failed or rolled-back deploy gets a notification too.
+A deploy needs code review consensus (or the user's recorded skip) on every commit it ships, a settled green CI run on the exact commit (for a live-hole fix, every local check on it), a passed scan, and the docs rules met. Moving trunk is part of the deploy: where the user runs deploys, agents never move trunk, by push or by merge. A deploy is whatever puts the change in front of its users: a server deploy, a package release, an app store build.
+
+The project's own checks then show that the deployed build works, and their results are recorded (`pipeline deploy record`, which checks `deploy.requiredChecks`). A health check is the default. A service with stored data also takes a backup first, runs a load check (every stored record loads), requests a few pages or endpoints over HTTP, and checks that it has not restarted. A library or CLI release might install the published build and run it once. A notification names what shipped. A failed or rolled-back deploy gets a notification too.
 
 ### 12. Cleanup
 
-After each deploy: merged `ci/*` branches are deleted (a branch whose commits all landed under new IDs after a rebase counts as merged), lane workspaces are forgotten and their folders removed, `jj workspace update-stale` runs in the main workspace, scratch databases are dropped, and the review folder is archived.
+After each deploy: merged `ci/*` branches are deleted (a branch whose commits all landed under new IDs after a rebase counts as merged), lane workspaces are forgotten and their folders removed, `jj workspace update-stale` runs in the main workspace, scratch databases (where the project uses them) are dropped, and the review folder is archived.
 
 Work the user drops is abandoned instead (`pipeline abandon`), with who decided and why. Its lanes give up their files, and it never deploys.
 
 ### 13. Live play
 
-After each deploy, live play agents use the deployed build, with a lead user and two or three other users on phones and desktops in separate browser sessions. They play the way a group would, not only the happy path: interrupt flows, reload mid-action, go offline and back, undo and redo, use two devices at once. They record what each client receives and check that nothing private reaches a client that may not see it. They play against a local server on the deployed commit with its own ports and database, never the live site.
+Live play exercises an actual running version of the deployed commit the way its real users or clients would, beyond what the automated tests cover, and fixes what breaks. The tests check what someone thought to write down. Live play looks for what nobody did.
 
-Each bug gets a stable ID with a severity (`LP4-UI-1`, P0 to P3). A fix makes the app do what the docs already say, in its own small commit with a test that fails without it. Anything that would change documented behavior is "needs owner": it goes to the coordinator with a recommendation and is decided and logged. The fixes form a hotfix run and go through review and deploy like any change.
+What that looks like depends on the software:
+
+- **A web app:** several users at once, in separate sessions, on different devices and screen sizes.
+- **An API service:** real clients calling the running service, with real request sequences, bad input and retries.
+- **A CLI:** real commands on real inputs, messy files and pipes included.
+- **A library:** a small consumer app built against the released build.
+- **A mobile app:** a device or an emulator.
+
+Live play agents go past the happy path wherever the software allows it: they interrupt flows, restart mid-action, lose the network and come back, undo and redo, and run two clients at once. Checks that fit only some software apply only there:
+
+- if the software has access boundaries (users, roles, tenants, hidden data), check that no client receives what it may not see
+- if it keeps state, check that the state survives a restart
+- if several clients share state, check that they agree.
+
+After each deploy, live play runs against an isolated instance of the deployed commit, with its own ports, data and credentials, never production. The live play brief says what to exercise and how (see [templates/briefs.md](../templates/briefs.md)).
+
+Each bug gets a stable ID with a severity (`LP3-UI-1`, P0 to P3). A fix makes the software do what its docs already say, in its own small commit with a test that fails without it. Anything that would change documented behavior is "needs owner": it goes to the coordinator with a recommendation and is decided and logged. The fixes form a hotfix run and go through review and deploy like any change.
 
 Live play runs beside the next design or build, never blocking it.
 
@@ -142,7 +162,7 @@ P3 findings and decided needs-owner items land in a backlog. A follow-up batch t
 
 ### 15. Docs
 
-Docs change with the behavior they describe: the feature list (what the app does today), the user guide, and the keyboard shortcut sheet (keys and key-plus-pointer combinations). When a run of features has shipped, one dedicated guide pass reads the guide as a whole, adds and reworks sections, and retakes screenshots from fixture data, never real user data.
+Docs change with the behavior they describe: the feature list (what the software does today), the user docs, and any reference that must track a source file, such as a keyboard shortcut sheet, a CLI's option reference or an API reference (`docs.shortcutSources` and `docs.shortcutDocs`). Each of these is optional and named in the config. When a run of features has shipped, one dedicated docs pass reads the user docs as a whole and adds and reworks sections. Where the software has a UI, it also retakes screenshots from fixture data, never real user data.
 
 ## The fast lanes
 
@@ -158,7 +178,7 @@ The tool cannot judge these, so each has a recorded sign-off (`pipeline signoff`
 - whether every product choice in guess mode was logged: the `decisions/complete` sign-off
 - whether the build did what its brief said, one commit per item, whole bug classes fixed: the `build/scope` sign-off
 - whether a live play fix only fixes, without changing behavior: the `live-play/bug-fix-only` sign-off
-- whether the guide pass reads well: the `docs/guide-voice` sign-off
+- whether the docs pass reads well as a whole: the `docs/read-through` sign-off, or the project's own item in `signoffs.docs`
 - whether a scan finding (a URL, an HTML sink) is safe: the scan's acknowledgment
 - whether a change belongs in the fast lane, beyond the file count and forbidden paths the tool checks
 - product questions themselves: the decision log.

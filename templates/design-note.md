@@ -22,7 +22,7 @@ The behavior, rule by rule, precise enough to test.
 
 ## 3. UI and UX
 
-<!-- Required when the change has UI. -->
+<!-- Required when the change has a UI. Delete it otherwise. -->
 
 Entry point, each screen and its states, every error, loading states, keys and focus, screen readers, small screens and large interface sizes, the exact words.
 

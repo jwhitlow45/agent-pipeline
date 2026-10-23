@@ -1,6 +1,6 @@
 # Stages: what the tool checks
 
-Each run (a feature, a batch, a hotfix, a follow-up batch, a guide pass) is one JSON file in the ledger, `~/.local/state/agent-pipeline/runs/<run>.json`. Each stage records the facts it checked, on which commits, and its state. Each stage with a state is mirrored to GitHub as a commit status with the context `pipeline/<stage>`:
+Each run (a feature, a batch, a hotfix, a follow-up batch, a docs pass) is one JSON file in the ledger, `~/.local/state/agent-pipeline/runs/<run>.json`. Each stage records the facts it checked, on which commits, and its state. Each stage with a state is mirrored to GitHub as a commit status with the context `pipeline/<stage>`:
 
 - stages about the change (intake, design, decisions, build, scan, ci, review, docs) go on the run's tip
 - stages about the release (deploy, cleanup, live-play) go on the deployed commit.
@@ -84,7 +84,7 @@ A lane stops owning its files when its run's cleanup passes or the run is abando
 - a signature jj reports as good (`commits.acceptedSignatures`)
 - every touched file inside the lane's globs, unless `--outside` gives the reason
 - no file another open lane owns, a new file included
-- feature list and guide changes in their own commit, never with code (`docs.separateCommit`)
+- feature list and user docs changes in their own commit, never with code (`docs.separateCommit`)
 - for a fast run: at most `fastLane.maxFiles` files, and none under `fastLane.forbiddenPaths`.
 
 ### Checks
@@ -201,7 +201,7 @@ It prints `deploy.command` filled in. The gate knows the deploy script by its re
 
 A run fixing a live hole deploys from the local commit, and its commits reach the public remote only after the deploy passes: [the example deploy script](../profiles/raccoon-vtt/deploy.example.sh) asks `pipeline deploy check` first, deploys the exact local commit, checks the server, and only then pushes main.
 
-`pipeline deploy record --run R --name N --shipped "<what shipped>" --backup B --health H --load N/M --http "200 200"` checks each of `deploy.requiredChecks`: a backup name, health in `deploy.healthyValues`, a load check with every record loaded, every HTTP answer 2xx or 3xx, and zero restarts when `restarts` is required. It refuses to record a deploy the gate would have refused, unless `--ungated "<why>"`. It sends the notification ("Deployed N: what shipped", or "Deploy of N failed: why") through `notify.command`. `--failed [why]` records a failed deploy, notification included.
+`pipeline deploy record --run R --name N --shipped "<what shipped>" --health H [--backup B --load N/M --http "200 200" --restarts 0]` checks each of `deploy.requiredChecks` (`health` by default) and ignores the rest: health in `deploy.healthyValues`, a backup name, a load check with every record loaded, every HTTP answer 2xx or 3xx, and zero restarts. It refuses to record a deploy the gate would have refused, unless `--ungated "<why>"`. It sends the notification ("Deployed N: what shipped", or "Deploy of N failed: why") through `notify.command`. `--failed [why]` records a failed deploy, notification included.
 
 **Judgment:** the go-ahead for production, where the user runs deploys. The user runs the command, and the agent records the results with `--by user`.
 
@@ -224,11 +224,13 @@ It passes when nothing is left, and releases the run's lanes, so their files can
 
 ## live-play
 
-`pipeline live-play start --run R --prefix LP14 [--workspace DIR] [--db NAMES] [--brief F]` needs a passed deploy and starts on the deployed commit. Bugs are added one at a time (`live-play bug --id --severity --area --summary --status fixed|needs-owner|known|not-a-bug [--commit] [--recommend]`) or from the report's table (`live-play import --report F`, with rows `| ID | Sev | Area | Bug | Status |` and a status cell of `fixed <commit>` or `needs owner: <recommendation>`).
+Live play exercises a running copy of the deployed commit the way its real users or clients would, on an isolated instance, never production ([process.md](process.md#13-live-play) says what that means for each kind of software). The tool records its bugs and checks how each one ended. What to exercise and how is the live play brief's job, not the tool's.
+
+`pipeline live-play start --run R --prefix LP3 [--workspace DIR] [--db NAMES] [--brief F]` needs a passed deploy and starts on the deployed commit. `--workspace` is the isolated instance's checkout and `--db` its scratch databases, if any. Bugs are added one at a time (`live-play bug --id --severity --area --summary --status fixed|needs-owner|known|not-a-bug [--commit] [--recommend]`) or from the report's table (`live-play import --report F`, with rows `| ID | Sev | Area | Bug | Status |` and a status cell of `fixed <commit>` or `needs owner: <recommendation>`).
 
 `pipeline live-play done --run R` passes when:
 
-- every ID matches `livePlay.idPattern` (`LP14-AREA-1`) and has a severity P0 to P3
+- every ID matches `livePlay.idPattern` (`LP3-AREA-1`) and has a severity P0 to P3
 - every fixed bug's commit is a `fix` commit, touches at most `livePlay.maxFilesPerFix` files, and has shipped: its patch-id is in trunk, which means it went through review and a deploy
 - every needs-owner bug is resolved with a logged decision (`live-play resolve --id X --decision ID`) or a backlog item (`--followup ID`)
 - the `live-play/bug-fix-only` sign-off is in.
@@ -244,12 +246,12 @@ It passes when nothing is left, and releases the run's lanes, so their files can
 `pipeline docs --run R [--tip REV]` checks the range from trunk to the tip:
 
 - a `feat` commit that changes `docs.behaviorPaths` needs `docs.featureList` updated in the same range
-- a change to `docs.shortcutSources` needs every file in `docs.shortcutDocs` updated in the same range
-- feature list and guide changes stay out of code commits (checked per commit, at `pipeline commits`).
+- a change to `docs.shortcutSources` (a key map, a CLI's option table, an API schema) needs every file in `docs.shortcutDocs` updated in the same range
+- feature list and user docs changes stay out of code commits (checked per commit, at `pipeline commits`).
 
-The deploy check runs the same rules and records this stage. For a docs run (a guide pass), it also needs `docs.guide` changed, new files matching `docs.screenshots`, and the `docs/guide-voice` sign-off. `pipeline docs --run R --due` lists the feature runs deployed since the last guide pass.
+Each rule is off until its keys are set. The deploy check runs the same rules and records this stage. For a docs run (a docs pass), it also needs `docs.guide` changed when it is set, new files matching `docs.screenshots` when they are set, and the `docs/read-through` sign-off. `pipeline docs --run R --due` lists the feature runs deployed since the last docs pass.
 
-**Judgment:** whether the guide reads well as a whole. Sign-off `docs/guide-voice`.
+**Judgment:** whether the user docs read well as a whole. Sign-off `docs/read-through`, or the project's own item in `signoffs.docs`.
 
 ## notifications
 
@@ -262,6 +264,6 @@ The deploy check runs the same rules and records this stage. For a docs run (a g
 - `decisions/complete`, in guess mode
 - `build/scope`
 - `live-play/bug-fix-only`
-- `docs/guide-voice`, for docs runs.
+- `docs/read-through`, for docs runs.
 
 A project adds its own in `signoffs`, and `--extra` records one that is not configured.

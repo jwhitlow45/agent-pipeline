@@ -2,6 +2,8 @@
 
 A delivery process for agent teams, written down and made checkable. A coordinating agent takes a user's request through design, design review, a parallel build, code review, CI, deploy, live play of the deployed build, follow-ups and docs, with other agents doing the work at each stage.
 
+It fits any software. Live play, for one, means exercising a running copy of the deployed commit the way its real users or clients would, beyond the automated tests, and fixing what breaks: several users in separate sessions for a web app, real clients for an API, real commands for a CLI, a small consumer app for a library, a device or emulator for a mobile app. It runs on an isolated instance, never production. Steps that fit only some software, such as a UI and UX section, user docs and screenshots, stay off until a project's config turns them on.
+
 The `pipeline` CLI records each stage in a ledger, the way agent-review records reviews. It mirrors each stage to GitHub as a commit status (`pipeline/design`, `pipeline/build`, `pipeline/scan`, `pipeline/ci`, `pipeline/deploy`, `pipeline/live-play`, `pipeline/docs` and others), and its gate refuses a step whose earlier stages have not passed: a push before the pre-push scan, a deploy before review consensus and green CI on the exact commit, a code review before the build passed.
 
 ## How it works
@@ -41,7 +43,7 @@ Parallel lanes and their ownership. [Details](docs/diagrams.md#4-parallel-lanes-
 - [docs/stages.md](docs/stages.md): what the tool checks at each stage, and which steps stay judgment calls with a recorded sign-off.
 - [docs/config.md](docs/config.md): `pipeline.config.json`.
 - [docs/integration.md](docs/integration.md): installing on another machine, for Claude Code, Codex, or an agent without hooks, and running code review without agent-review.
-- [profiles/raccoon-vtt](profiles/raccoon-vtt/): the project this came from, as a worked example.
+- [profiles/raccoon-vtt](profiles/raccoon-vtt/): the project this came from, a self-hosted web app, as a worked example. Its project-specific settings live there and nowhere else.
 - [templates](templates/): the shared preamble, brief templates and a design note skeleton.
 
 ## Install
@@ -81,9 +83,9 @@ jj bookmark set ci/dark-mode -r <tip> && jj git push --bookmark ci/dark-mode
 pipeline ci --run dark-mode --wait
 # code review rounds to consensus (agent-review, or pipeline review), then:
 pipeline deploy check --run dark-mode
-pipeline deploy record --run dark-mode --name batch-12 --shipped "dark mode" --backup <file> --health healthy --load 12/12 --http "200 200 200"
+pipeline deploy record --run dark-mode --name batch-12 --shipped "dark mode" --health healthy
 pipeline cleanup --run dark-mode
-pipeline live-play start --run dark-mode --prefix LP7
+pipeline live-play start --run dark-mode --prefix LP1
 pipeline status --run dark-mode
 ```
 

@@ -6,7 +6,7 @@ The gate's own keys come only from `pipeline.config.json` as committed at the tr
 
 An unknown key is refused, so a typo never turns a check off. A value of the wrong type is refused too. A value in angle brackets, such as `<private-domain>`, is a placeholder: it is never scanned for, and `config --check` reports it.
 
-[pipeline.config.example.json](../pipeline.config.example.json) is a starting point, and [profiles/raccoon-vtt](../profiles/raccoon-vtt/) a full example.
+[pipeline.config.example.json](../pipeline.config.example.json) is a starting point, and [profiles/raccoon-vtt](../profiles/raccoon-vtt/) a full example for one web app. The defaults assume no kind of software: settings that fit only some (e2e files, user docs, screenshots, scratch databases, post-deploy checks beyond health) stay empty until a project sets them.
 
 ## Top level
 
@@ -57,7 +57,7 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 |---|---|---|
 | `checks.parallel` | `[]` | `{ "name", "run" }` checks run side by side: typecheck, unit tests, build. |
 | `checks.integration` | `[]` | Run one after another, after the parallel phase. |
-| `checks.e2e.command` | `null` | The command for one e2e file, with `{file}`. |
+| `checks.e2e.command` | `null` | The command for one e2e file, with `{file}`. An e2e file drives the software from outside: a browser for a web app, a client for an API, the shell for a CLI. |
 | `checks.e2e.files` | `[]` | Every e2e file. `--e2e all` runs them all. |
 | `checks.e2e.always` | `[]` | Files every lane runs, whatever it touched. |
 | `checks.e2e.beforeEach` | `null` | A command before each file, such as clearing rate limits. When it fails or runs out of time, that file fails without running. |
@@ -81,7 +81,7 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 | `scan.private` | `[]` | Strings that must never be added: the live domain, the deploy host. Set them in `pipeline.local.json`. |
 | `scan.privateRegex` | `[]` | The same, as patterns. |
 | `scan.secrets` | `true` | Keys, tokens, webhooks, credentials in URLs. |
-| `scan.htmlSinks` | `true` | |
+| `scan.htmlSinks` | `true` | For web code. It finds nothing in code without HTML. |
 | `scan.urls` | `true` | |
 | `scan.allowedUrlHosts` | example.com, example.org, localhost, 127.0.0.1 | Hosts (and their subdomains) URLs may name without a look. |
 | `scan.emDashInContent` | `"error"` | `"error"`, `"review"` or `"off"`. |
@@ -128,19 +128,21 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 
 ## `docs`, `livePlay`, `followups`, `cleanup`, `signoffs`
 
+The `livePlay` keys only bound its fixes and bug IDs. What live play exercises, and on which isolated instance, is set per run in the live play brief, since it depends on the kind of software ([process.md](process.md#13-live-play)).
+
 | Key | Default | Meaning |
 |---|---|---|
 | `docs.featureList` | `null` | The user-facing feature list. A `feat` commit changing `docs.behaviorPaths` needs it updated in the same range. |
-| `docs.guide` | `null` | The user guide. A docs run must change it. |
-| `docs.shortcutSources` | `[]` | Files that define keys and key-plus-pointer combinations. |
-| `docs.shortcutDocs` | `[]` | Files that must change with them. |
+| `docs.guide` | `null` | The main user docs file, such as a user guide, a README or a reference. A docs run must change it. |
+| `docs.shortcutSources` | `[]` | Source files that docs must track, such as a keyboard shortcut registry, a CLI's option table or an API schema. |
+| `docs.shortcutDocs` | `[]` | Files that must change in the same range as any of `docs.shortcutSources`. |
 | `docs.behaviorPaths` | `[]` | Globs of code whose change is user-visible. |
-| `docs.screenshots` | `[]` | Globs a docs run must add or change. |
-| `docs.separateCommit` | `true` | Feature list and guide changes never share a commit with code. |
-| `livePlay.maxFilesPerFix` | `8` | |
-| `livePlay.idPattern` | `^{prefix}-[A-Z0-9]+-\d+$` | |
+| `docs.screenshots` | `[]` | Globs a docs run must add or change, for software with a UI. |
+| `docs.separateCommit` | `true` | Feature list and user docs changes never share a commit with code. |
+| `livePlay.maxFilesPerFix` | `8` | The most files one live play fix may touch. A bigger fix is a design change. |
+| `livePlay.idPattern` | `^{prefix}-[A-Z0-9]+-\d+$` | What a live play bug ID looks like. `{prefix}` is the `--prefix` live play started with, such as `LP3`. |
 | `followups.blockingNeedsDecision` | `true` | A P0 to P2 item needs a logged decision to be deferred. |
-| `cleanup.databaseList` | `null` | A shell command printing database names, one per line. |
+| `cleanup.databaseList` | `null` | For a project with scratch databases: a shell command printing their names, one per line. |
 | `cleanup.databaseDrop` | `null` | The drop command, with `{db}`. |
 | `cleanup.archiveDir` | `null` | Where review folders are archived. |
-| `signoffs` | decisions: complete, build: scope, live-play: bug-fix-only, docs: read-through | Judgment calls each stage needs recorded. A project may add its own stages and items, or rename one (raccoon-vtt's docs sign-off is `guide-voice`). |
+| `signoffs` | decisions: complete, build: scope, live-play: bug-fix-only, docs: read-through | Judgment calls each stage needs recorded. A project may add its own stages and items, or replace one, such as the docs item with a check of its own docs' voice. |
