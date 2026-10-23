@@ -3,6 +3,7 @@
   "owner": {
     "name": "jwhitlow45"
   },
+  "description": "The agent delivery process for Claude Code and Codex: a stage ledger, a gate on pushes, reviews and deploys, and pipeline/<stage> GitHub statuses.",
   "plugins": [
     {
       "name": "agent-pipeline",

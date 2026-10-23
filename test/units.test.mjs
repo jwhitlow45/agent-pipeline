@@ -232,3 +232,10 @@ test('a decision is logged only by an entry that starts with its ID, never by a 
   appendDecision({ id: 'RS-O-2', chose: 'a', why: 'b', rejected: 'c' }, cfg);
   assert.deepEqual(missingDecisions(['RS-O-2'], cfg), []);
 });
+
+test('the plugin hooks cover every Claude Code tool that runs a command, and the marketplace describes itself', () => {
+  const read = (path) => JSON.parse(readFileSync(new URL(`../${path}`, import.meta.url), 'utf8'));
+  const { hooks } = read('hooks/hooks.json');
+  for (const event of ['PreToolUse', 'PostToolUse']) assert.deepEqual(hooks[event].map((entry) => entry.matcher.split('|').sort()), [['Bash', 'Monitor', 'PowerShell']]);
+  assert.ok(read('.claude-plugin/marketplace.json').description);
+});
