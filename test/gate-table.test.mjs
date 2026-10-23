@@ -250,6 +250,10 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['ws', 'jj git push -b feature', 2, /PowerShell/, { tool_name: 'PowerShell' }],
     ['ws', 'Get-ChildItem', 0, null, { tool_name: 'PowerShell' }],
     ['ws', 'jj git push -b feature', 2, NOT_OURS, { tool_name: 'Monitor' }],
+    // When the bookmark command fails (create of a name that exists), the push after `;` sends the bookmark where it is now.
+    { name: 'a local bookmark at an unscanned commit', setup: (b, v) => b.sh(`jj bookmark set ci/side2 -r ${v.S2}`) },
+    ['repo', 'jj bookmark create ci/side2 -r %tip% ; jj git push -b ci/side2', 2, UNSCANNED],
+    { name: 'delete it again', setup: (b) => b.sh('jj bookmark delete ci/side2') },
     // P1-5: a local trunk moved ahead without a push changes no range
     { name: 'move main locally to the unreviewed tip', setup: (b, v) => b.sh(`jj bookmark set main -r ${v.tip}`) },
     ['repo', 'jj git push -b main', 2, /Code review consensus/],
