@@ -95,6 +95,9 @@
   "livePlay": {
     "maxFilesPerFix": 8
   },
+  "signoffs": {
+    "docs": ["guide-voice"]
+  },
   "cleanup": {
     "databaseList": "PGPASSWORD=\"$PGPASSWORD\" psql -h localhost -p 5434 -U raccoon -lqt | cut -d'|' -f1",
     "databaseDrop": "PGPASSWORD=\"$PGPASSWORD\" dropdb -h localhost -p 5434 -U raccoon --force {db}"

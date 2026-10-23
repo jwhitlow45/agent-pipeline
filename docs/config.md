@@ -113,7 +113,7 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 | `deploy.match` | `null` | A regex that finds the deploy command in a shell command run inside this repository's folders, for the gate. It must match from the command's first word. |
 | `deploy.tipArg` | `null` | Which positional argument of the deploy command is the revision it deploys, counted from 1. |
 | `deploy.runBy` | `"user"` | `"user"`: agents never run the deploy or move trunk, and are given the command for the user. `"agent"`: agents may, after the gate. |
-| `deploy.requiredChecks` | backup, health, load, http | What `deploy record` must be given. `restarts` may be added. |
+| `deploy.requiredChecks` | health | What `deploy record` must be given, from `health`, `backup`, `load`, `http` and `restarts`. A service with stored data usually needs all five. |
 | `deploy.healthyValues` | healthy, ok | |
 | `deploy.deployWorkflows` | `"deploy"` | A regex over a workflow's file path and display name for the workflows that deploy. A workflow whose file names an `environment:` deploys too. Name every deploy workflow so one of these holds. |
 | `deploy.allowedWorkflows` | `[]` | Under `runBy: "user"`, the workflows agents may still dispatch or rerun, by file path (`.github/workflows/lint.yml`). Every other workflow is the user's. A deploy workflow on the list is checked as any deploy is, and a production one is still refused. |
@@ -143,4 +143,4 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 | `cleanup.databaseList` | `null` | A shell command printing database names, one per line. |
 | `cleanup.databaseDrop` | `null` | The drop command, with `{db}`. |
 | `cleanup.archiveDir` | `null` | Where review folders are archived. |
-| `signoffs` | decisions: complete, build: scope, live-play: bug-fix-only, docs: guide-voice | Judgment calls each stage needs recorded. A project may add its own stages and items. |
+| `signoffs` | decisions: complete, build: scope, live-play: bug-fix-only, docs: read-through | Judgment calls each stage needs recorded. A project may add its own stages and items, or rename one (raccoon-vtt's docs sign-off is `guide-voice`). |

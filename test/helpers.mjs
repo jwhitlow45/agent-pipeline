@@ -122,7 +122,7 @@ export const baseConfig = {
   push: { public: false },
   review: { provider: 'builtin' },
   ci: { workflow: 'CI' },
-  deploy: { command: './deploy.sh {name} {tip}', match: 'deploy\\.sh', tipArg: 2, runBy: 'agent' },
+  deploy: { command: './deploy.sh {name} {tip}', match: 'deploy\\.sh', tipArg: 2, runBy: 'agent', requiredChecks: ['backup', 'health', 'load', 'http'] },
   notify: { command: ['sh', '-c', 'echo "$1" >> "$NOTES"', 'sh', '{message}'] },
   docs: { featureList: 'FEATURES.md', behaviorPaths: ['src/**'] },
 };

@@ -204,7 +204,7 @@ test('CI settles only when the run and every job have completed', () => {
 });
 
 test('deploy checks: backup, health, a full load check and HTTP answers', () => {
-  const cfg = config();
+  const cfg = config({ deploy: { ...DEFAULTS.deploy, requiredChecks: ['backup', 'health', 'load', 'http'] } });
   assert.deepEqual(deployCheckProblems({ backup: 'db.dump', health: 'healthy', load: '12/12', http: '200 200 301' }, cfg), []);
   const problems = deployCheckProblems({ backup: '', health: 'starting', load: '11/12', http: '200 502' }, cfg);
   assert.equal(problems.length, 4);

@@ -1,6 +1,6 @@
 {
-  "//": "agent-pipeline config. Committed. Private values go in pipeline.local.json, which is gitignored. See docs/config.md.",
-  "project": "my-app",
+  "//": "agent-pipeline config. Committed. Private values go in pipeline.local.json, which is gitignored. See docs/config.md. Fill in what your project has and delete the rest: e2e tests, user docs, screenshots and databases are all optional.",
+  "project": "my-project",
   "trunk": "main",
   "remote": "origin",
   "brief": {
@@ -12,7 +12,7 @@
     "requiredSections": ["Tests", "Build plan"]
   },
   "decisions": {
-    "file": "~/decisions/my-app-decisions.md",
+    "file": "~/decisions/my-project-decisions.md",
     "guessMode": false
   },
   "checks": {
@@ -25,8 +25,9 @@
       { "name": "integration", "run": "npm run -s test:int" }
     ],
     "e2e": {
+      "//": "End-to-end tests, one file at a time: a browser suite for a web app, real client calls for an API, real commands for a CLI. Leave command null when there are none.",
       "command": "node --test --test-concurrency=1 e2e/{file}.e2e.ts",
-      "files": ["login", "checkout", "settings", "smoke"],
+      "files": ["smoke", "settings", "errors"],
       "always": ["smoke"],
       "beforeEach": null,
       "timeoutSec": 1500
@@ -52,18 +53,20 @@
     "match": "scripts/deploy\\.sh",
     "tipArg": 2,
     "runBy": "user",
-    "requiredChecks": ["backup", "health", "load", "http"]
+    "//": "requiredChecks: health by default. A service with stored data adds backup, load, http and restarts.",
+    "requiredChecks": ["health"]
   },
   "notify": {
     "command": ["agent-notify", "{message}"]
   },
   "docs": {
+    "//": "guide is the main user docs file. shortcutSources pairs source files, such as a key map or a CLI's option table, with the shortcutDocs that describe them. screenshots applies to software with a UI.",
     "featureList": "FEATURES.md",
     "guide": "docs/guide.md",
     "shortcutSources": [],
     "shortcutDocs": [],
-    "behaviorPaths": ["src/**", "server/**"],
-    "screenshots": ["docs/guide/*.webp"]
+    "behaviorPaths": ["src/**"],
+    "screenshots": []
   },
   "cleanup": {
     "databaseList": null,
