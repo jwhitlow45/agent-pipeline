@@ -9,7 +9,7 @@ import { cmdDocs, cmdFollowup, cmdLivePlay } from '../lib/after.mjs';
 import { cmdBuild, cmdCheck, cmdCommits, cmdIntegrate, cmdLane, cmdMutation, cmdReport } from '../lib/build.mjs';
 import { cmdExec, cmdGate, cmdGitPrePush, cmdMirrorHook } from '../lib/hooks.mjs';
 import { cmdBrief, cmdDecide, cmdDecisions, cmdDesign, cmdIntake, cmdSignoff, cmdSpec } from '../lib/plan.mjs';
-import { cmdCi, cmdCleanup, cmdDeploy, cmdNotify, cmdPush, cmdRebase, cmdReview, cmdScan } from '../lib/ship.mjs';
+import { cmdAbandon, cmdCi, cmdCleanup, cmdDeploy, cmdNotify, cmdPush, cmdRebase, cmdReview, cmdScan } from '../lib/ship.mjs';
 import { cmdConfig, cmdInit, cmdMirror, cmdStatus } from '../lib/status.mjs';
 import { stateDir, UsageError } from '../lib/util.mjs';
 
@@ -48,6 +48,7 @@ Ship
   deploy    record --run R --name N --shipped TEXT --backup B --health H --load N/M --http "200 200" [--restarts 0] [--failed [WHY]] [--by agent|user] [--ungated WHY] [--no-notify]
   notify    --run R --event deploy|waiting|done|failed|note --message TEXT
   cleanup   --run R
+  abandon   --run R --reason "the user's words" --by WHO   Stop a run for good: releases its lanes, and it never deploys
 
 After
   live-play start|bug|import|resolve|status|done --run R [--prefix LPn] [--deployed REV] [--workspace DIR] [--db NAMES] [--brief F]
@@ -83,7 +84,7 @@ OPTIONS.help.short = 'h';
 const COMMANDS = {
   init: cmdInit, config: cmdConfig, intake: cmdIntake, brief: cmdBrief, design: cmdDesign, spec: cmdSpec, decide: cmdDecide, decisions: cmdDecisions, signoff: cmdSignoff,
   lane: cmdLane, commits: cmdCommits, integrate: cmdIntegrate, check: cmdCheck, mutation: cmdMutation, report: cmdReport, build: cmdBuild,
-  scan: cmdScan, push: cmdPush, ci: cmdCi, rebase: cmdRebase, notify: cmdNotify, cleanup: cmdCleanup, docs: cmdDocs,
+  scan: cmdScan, push: cmdPush, ci: cmdCi, rebase: cmdRebase, notify: cmdNotify, cleanup: cmdCleanup, abandon: cmdAbandon, docs: cmdDocs,
   status: cmdStatus, mirror: cmdMirror, gate: cmdGate, 'mirror-hook': cmdMirrorHook, 'git-pre-push': cmdGitPrePush,
 };
 const SUBCOMMANDS = { review: cmdReview, deploy: cmdDeploy, 'live-play': cmdLivePlay, followup: cmdFollowup };

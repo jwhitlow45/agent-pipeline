@@ -622,3 +622,28 @@ describe('a fix for a hole live on the server', () => {
   });
 });
 
+
+describe('abandoning a run', () => {
+  const box = sandbox({ config: { ...baseConfig, push: { public: true } } });
+  after(() => box.cleanup());
+
+  test('records who and why, frees its files, never deploys, and keeps a live hole private', () => {
+    const { ws } = builtRun(box, { intake: ['--live-hole'] });
+    assert.match(box.cli(['abandon', '--run', 'dark', '--by', 'owner']).err, /--reason is required/);
+    const abandoned = box.cli(['abandon', '--run', 'dark', '--reason', 'the user dropped the toggle', '--by', 'owner']);
+    assert.equal(abandoned.code, 0, abandoned.all);
+    assert.match(abandoned.out, /abandoned by owner: the user dropped the toggle[\s\S]*still stay off the public remote[\s\S]*jj workspace forget demo-dark/);
+    assert.match(box.cli(['abandon', '--run', 'dark', '--reason', 'again', '--by', 'owner']).err, /already abandoned/);
+    assert.equal(box.run('dark').events.at(-1).action, 'abandoned');
+    box.cli(['intake', '--run', 'two', '--kind', 'fast', '--words', WORDS]);
+    box.cli(['spec', '--run', 'two', '--file', '../dark-spec.md']);
+    box.sh('jj workspace add --name demo-two ../demo-two -r main');
+    const lane = box.cli(['lane', '--run', 'two', '--lane', 'a', '--workspace', join(box.root, 'demo-two'), '--owns', 'src/**']);
+    assert.equal(lane.code, 0, lane.all);
+    assert.match(box.cli(['deploy', 'check', '--run', 'dark']).out, /was abandoned by owner/);
+    assert.doesNotMatch(box.cli(['status']).out, /^dark /m);
+    assert.match(box.cli(['status', '--all']).out, /^dark .* abandoned$/m);
+    box.cli(['scan', '--run', 'dark'], { cwd: ws });
+    assert.match(box.gate('jj bookmark set ci/hole -r @- && jj git push -b ci/hole', ws).err, /was abandoned, but its commits fix a hole/);
+  });
+});
