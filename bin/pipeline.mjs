@@ -47,7 +47,8 @@ Ship
   review    status|start|round|done|skip --run R [--topic T] [--tip REV] [--no-commits --dir DIR] [--reviewers "..."] [--reason "user's words"]
   rebase    --run R --tip REV
   deploy    check  --run R [--tip REV] [--name N] [--prev SHA]
-  deploy    record --run R --name N --shipped TEXT --backup B --health H --load N/M --http "200 200" [--restarts 0] [--failed [WHY]] [--by agent|user] [--ungated WHY] [--no-notify]
+  deploy    record --run R --name N --shipped TEXT [--health H] [--backup B] [--load N/M] [--http "200 200"] [--restarts 0] [--failed [WHY]] [--by agent|user] [--ungated WHY] [--no-notify]
+            each check in deploy.requiredChecks is required (health by default)
   notify    --run R --event deploy|waiting|done|failed|note --message TEXT
   cleanup   --run R
   abandon   --run R --reason TEXT --by WHO            Stop a run for good: frees its lanes, never deploys
