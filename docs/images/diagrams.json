@@ -1,17 +1,80 @@
 {
-  "excalidraw": "0.18.1",
+  "renderer": {
+    "versions": {
+      "@excalidraw/excalidraw": "0.18.1",
+      "esbuild": "0.28.2",
+      "playwright-core": "1.63.0",
+      "react": "19.2.8",
+      "react-dom": "19.2.8"
+    },
+    "lockfile": "17499de8066b7e454d37508f822b3b2f6928f0e68d712c7475a2c117bdad09ef",
+    "browser": "chromium-headless-shell-1243",
+    "export": {
+      "scale": 2,
+      "padding": 24,
+      "background": true
+    }
+  },
   "drawings": {
-    "build-lane": "966872509ce1d8a83eb55e41609ccc744bc9183b67b545efb67a904742fa051e",
-    "ci": "312b8108639c9a7a85b7e8d836cb5b7bbed06032c928bde56b79836158b673e6",
-    "deploy-steps": "3f3e46e7aa0461313e972f6e9c51fffcfcedaa18dbec784157af48256a8c17e3",
-    "deploy": "e89ccd955a7e7e6cff712495ceaf5f33c2ac8adaced90a48b7a23c6c44b78aed",
-    "design": "7d3fa553ba703cc7f513f3089bf616463ba98b91bcf9c795758e5d08bcfead77",
-    "flow": "74c47b947d21bdee9305ce4381fb2b6e166921764f60c2bc10f12ef061311bb5",
-    "gate": "d8455394e16337930a6bbbfbb6937536e9e1a20f64d463735cebe3f20c37cce0",
-    "hotfix": "74c5dde862fa4728d3f1cf5b7b995da7778ebd7e18f198d196e4986b05372ffa",
-    "lanes": "4e47af49b99532d5324b79faefa4caa572b9359d0ae0879e1d0252520e0f48ff",
-    "live-play": "32f33ef99ca65c9d48ea58c76bd22ad9e39b0757ee12d97514ea1bf68272034d",
-    "review-loop": "85eec317cc2ae24f29958de660dfa36b61f39c8171f0fd292181cfc8c8f5b540",
-    "stage-states": "3c470062345406f770e57091e8b502993c334eb7f1b159f778e340a28240a6ee"
+    "build-lane": {
+      "source": "966872509ce1d8a83eb55e41609ccc744bc9183b67b545efb67a904742fa051e",
+      "light": "18ebbc4560797fda46afb8060c744bc7949c4ce687a2b50fdf5a8d751bc45080",
+      "dark": "bad34a05e71e0950076db7a53a89fee6ffb048953dc3383c12e5cc4bd9cf2ceb"
+    },
+    "ci": {
+      "source": "312b8108639c9a7a85b7e8d836cb5b7bbed06032c928bde56b79836158b673e6",
+      "light": "4348a124654151c59a0c72ecae9072aeef9dbff542b063944a4cea366e6cb355",
+      "dark": "266c3da16ccaae7275a51e8903bdd13eb350ba0ce00d92ae26513e593a81876e"
+    },
+    "deploy-steps": {
+      "source": "3f3e46e7aa0461313e972f6e9c51fffcfcedaa18dbec784157af48256a8c17e3",
+      "light": "fb0004d7ca52adc7a13cc382554e3db3d204e7d14ba8d926f4a9ae1d4171f632",
+      "dark": "b3abf99666cfb3290e24338873749d956b6b7c64cea7d2ab3829e92c817ff229"
+    },
+    "deploy": {
+      "source": "e89ccd955a7e7e6cff712495ceaf5f33c2ac8adaced90a48b7a23c6c44b78aed",
+      "light": "3f7f4e2c7144777f6b5307d4a7bc7fc370f21a2fb85f922458005f9d0af1e8a4",
+      "dark": "82be115e110df77a48957d0bd514835caa3f56693350b2c7cf18dec9fc260973"
+    },
+    "design": {
+      "source": "7d3fa553ba703cc7f513f3089bf616463ba98b91bcf9c795758e5d08bcfead77",
+      "light": "7c3bc04ddce51368809ab73933b3a3b0969a2c22337571e8237612aad28a8278",
+      "dark": "0ee54dd5f5751d3f0e9035f2c48a0194e614b84a4a4d2efda2ee79185eb0c1ae"
+    },
+    "flow": {
+      "source": "74c47b947d21bdee9305ce4381fb2b6e166921764f60c2bc10f12ef061311bb5",
+      "light": "ab8eb1ea65b558266e306315bd06d77f1d6a95b4dd55465885fb203df8d63827",
+      "dark": "ab3dfcecf91047a0f209894b19df7215aa2731f6b2ba537d2ef7d884c90ff294"
+    },
+    "gate": {
+      "source": "d8455394e16337930a6bbbfbb6937536e9e1a20f64d463735cebe3f20c37cce0",
+      "light": "632780e481245699b70218a9ce21e0fa4b32973f3cccbe2a99af0d16642a2b5b",
+      "dark": "ed4e2e495b140d2f63bd4b6523587b7ba5fe1c29491fe5d03d91fd5df4c38adf"
+    },
+    "hotfix": {
+      "source": "74c5dde862fa4728d3f1cf5b7b995da7778ebd7e18f198d196e4986b05372ffa",
+      "light": "2bb38cc6e66965ad410c292e292ddb6ea65e91577ef8e979d50c9b34c7ff3abd",
+      "dark": "94af5cb060ef2779d557a88befcca70bdff743604fef660027ec26e9c648afea"
+    },
+    "lanes": {
+      "source": "4e47af49b99532d5324b79faefa4caa572b9359d0ae0879e1d0252520e0f48ff",
+      "light": "dcf1a0b74153e6669c494f6d390a23b632a5d1ba67a3dcd0cb7be604f550cf32",
+      "dark": "66650e5cf32a7f0a26cc90d0468609238dd07558773076ab7dae2ae3365e6ebd"
+    },
+    "live-play": {
+      "source": "32f33ef99ca65c9d48ea58c76bd22ad9e39b0757ee12d97514ea1bf68272034d",
+      "light": "4bcbea8faab851123672b1147406d66e41e9bbd101652228993856a2d693cf76",
+      "dark": "0873bf912de0dc0b1020669e5c2646df2cdedfd6abdf56cb28892e7387df5213"
+    },
+    "review-loop": {
+      "source": "85eec317cc2ae24f29958de660dfa36b61f39c8171f0fd292181cfc8c8f5b540",
+      "light": "2f4667f4c615f1c4ea0c06017ae3e48e72a3152cbfe47ae3ca76934462ad42cd",
+      "dark": "94efe17d4891861068b74b29ca2bff7a33631b19f620706339cc96ceddffc759"
+    },
+    "stage-states": {
+      "source": "3c470062345406f770e57091e8b502993c334eb7f1b159f778e340a28240a6ee",
+      "light": "62163beae126c6448205bd957759e4afc53a4f3d1f591d6876bee599433806be",
+      "dark": "6cbc1239f5d18e61cc17105162e3a2193d42804e256337d92be22b2d9ae40e91"
+    }
   }
 }

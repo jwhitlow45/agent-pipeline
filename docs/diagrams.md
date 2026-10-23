@@ -1,6 +1,6 @@
 # Diagrams
 
-Each diagram below is an image rendered from an [Excalidraw](https://excalidraw.com) drawing in [diagrams](diagrams/). To edit one, open its `.excalidraw` file in excalidraw.com or in the VS Code Excalidraw extension, and save it in place. Then run `node scripts/render-diagrams.mjs` to render the light and dark images again. Add a drawing's name, such as `flow`, to render only that one. The script needs network access for `npm` and Google Chrome or Playwright's Chromium. `npm test` fails when an image is out of date.
+Each diagram below is an image rendered from an [Excalidraw](https://excalidraw.com) drawing in [diagrams](diagrams/). To edit one, open its `.excalidraw` file in excalidraw.com or in the VS Code Excalidraw extension, and save it in place. Then run `node scripts/render-diagrams.mjs` to render the light and dark images again. Add a drawing's name, such as `flow`, to render only that one. The script installs the exporter in [scripts/diagram-exporter](../scripts/diagram-exporter/) from its lockfile with `npm ci`, and the first time it downloads the Chromium build the pinned Playwright names into a folder of its own, so it needs network access. `npm test` fails when an image is out of date, was changed by hand, or was drawn by another exporter version, browser build or export setting.
 
 [process.md](process.md) explains each step in prose, and [stages.md](stages.md) lists what the tool checks at each one.
 
