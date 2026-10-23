@@ -6,7 +6,7 @@
 
 import { parseArgs } from 'node:util';
 import { cmdDocs, cmdFollowup, cmdLivePlay } from '../lib/after.mjs';
-import { cmdBuild, cmdCheck, cmdCommits, cmdLane, cmdMutation, cmdReport } from '../lib/build.mjs';
+import { cmdBuild, cmdCheck, cmdCommits, cmdIntegrate, cmdLane, cmdMutation, cmdReport } from '../lib/build.mjs';
 import { cmdExec, cmdGate, cmdGitPrePush, cmdMirrorHook } from '../lib/hooks.mjs';
 import { cmdBrief, cmdDecide, cmdDecisions, cmdDesign, cmdIntake, cmdSignoff, cmdSpec } from '../lib/plan.mjs';
 import { cmdCi, cmdCleanup, cmdDeploy, cmdNotify, cmdPush, cmdRebase, cmdReview, cmdScan } from '../lib/ship.mjs';
@@ -35,6 +35,7 @@ Build
   check     --run R --lane L --record NAME --exit CODE --log F
   mutation  --run R --lane L --commit REV --test FILE [--cmd CMD] | --manual HOW --exit CODE [--log F]
   report    --run R --lane L --file F
+  integrate --run R --tip REV                         The stacked tip of several lanes: checks it holds every lane commit
   build     --run R [--review-topic T]
 
 Ship
@@ -81,7 +82,7 @@ OPTIONS.help.short = 'h';
 
 const COMMANDS = {
   init: cmdInit, config: cmdConfig, intake: cmdIntake, brief: cmdBrief, design: cmdDesign, spec: cmdSpec, decide: cmdDecide, decisions: cmdDecisions, signoff: cmdSignoff,
-  lane: cmdLane, commits: cmdCommits, check: cmdCheck, mutation: cmdMutation, report: cmdReport, build: cmdBuild,
+  lane: cmdLane, commits: cmdCommits, integrate: cmdIntegrate, check: cmdCheck, mutation: cmdMutation, report: cmdReport, build: cmdBuild,
   scan: cmdScan, push: cmdPush, ci: cmdCi, rebase: cmdRebase, notify: cmdNotify, cleanup: cmdCleanup, docs: cmdDocs,
   status: cmdStatus, mirror: cmdMirror, gate: cmdGate, 'mirror-hook': cmdMirrorHook, 'git-pre-push': cmdGitPrePush,
 };

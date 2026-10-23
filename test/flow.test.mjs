@@ -358,6 +358,11 @@ describe('rebase onto main', () => {
     assert.equal(box.run('dark').stages.build.state, 'stale');
     // New commit ids: the scan and CI run again on them.
     assert.equal(box.run('dark').stages.scan.state, 'stale');
+    // The lane's evidence covered the old commits, so the build does not pass again on the new ones.
+    const build = box.cli(['build', '--run', 'dark']);
+    assert.equal(build.code, 1);
+    assert.match(build.out, /not in the rebased range/);
+    assert.match(build.out, /has no mutation check/);
   });
 });
 
@@ -539,3 +544,33 @@ describe('a review status from GitHub counts only from a trusted writer', () => 
     assert.match(review(), /: passed, 2 consensus \(github agent-review by example-owner\)/);
   });
 });
+
+describe('several lanes integrate into one tip', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+
+  test('the build passes only once pipeline integrate records a tip that holds every lane commit', () => {
+    const { ws } = builtRun(box);
+    const other = join(box.root, 'demo-dark-b');
+    box.sh(`jj workspace add --name demo-dark-b ${other} -r main`);
+    assert.equal(box.cli(['lane', '--run', 'dark', '--lane', 'b', '--workspace', other, '--owns', 'lib/**']).code, 0);
+    box.commit('fix(lib): a helper', { 'lib/help.mjs': 'export const help = 1;\n' }, other);
+    assert.equal(box.cli(['commits', '--run', 'dark', '--lane', 'b'], { cwd: other }).code, 0);
+    assert.equal(box.cli(['check', '--run', 'dark', '--lane', 'b'], { cwd: other }).code, 0);
+    box.cli(['report', '--run', 'dark', '--lane', 'b', '--file', '../dark-report.md']);
+    const unintegrated = box.cli(['build', '--run', 'dark']);
+    assert.equal(unintegrated.code, 1);
+    assert.match(unintegrated.out, /not integrated: stack the lanes and run pipeline integrate/);
+    const laneA = box.sh('jj log --no-graph -r @- -T commit_id', ws).trim();
+    assert.match(box.cli(['integrate', '--run', 'dark', '--tip', laneA]).err, /does not hold every lane commit.*lane b/s);
+    const change = box.sh('jj log --no-graph -r @- -T change_id', other).trim();
+    box.sh(`jj rebase -r ${change} -d ${laneA}`);
+    const stacked = box.sh(`jj log --no-graph -r ${change} -T commit_id`).trim();
+    const integrated = box.cli(['integrate', '--run', 'dark', '--tip', stacked]);
+    assert.equal(integrated.code, 0, integrated.all);
+    assert.equal(box.run('dark').tip, stacked);
+    const built = box.cli(['build', '--run', 'dark']);
+    assert.equal(built.code, 0, built.all);
+  });
+});
+
