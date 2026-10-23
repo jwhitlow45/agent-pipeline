@@ -184,7 +184,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'git push fork %tip%:refs/heads/ci/x', 2, /pushes to fork/],
     ['repo', 'git push origin', 2, /whatever git picks/],
     ['repo', "git push origin 'refs/heads/*:refs/heads/*'", 2, /pattern or a negative refspec/],
-    ['repo', 'git push origin %tip%:refs/notes/x', 2, /is not a branch/],
+    ['repo', 'git push origin %tip%:refs/notes/x', 2, /is not a branch\. Agents push only branches/],
     ['repo', 'git push origin %tip%:refs/heads/', 2, /cannot tell which branch/],
     ['repo', 'git push origin HEAD', 2, /has no branch name of its own/],
     ['repo', 'git push origin nosuchref:refs/heads/ci/x', 2, /cannot tell which commit nosuchref is/],
