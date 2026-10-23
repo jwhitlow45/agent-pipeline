@@ -98,13 +98,13 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     // R2-3, PA-20 to PA-23, PA-31: a shell, wrapper or alias around a gated tool is refused, not read.
     ['ws', "bash -o pipefail -c 'jj git push -b feature'", 2, through('bash')],
     ['ws', "bash -o pipefail -c 'jj git push -b ci/fresh'", 2, through('bash')],
-    ['ws', "echo 'jj git push -b ci/fresh' | sh", 2, PIPE],
+    ['ws', "echo 'jj git push -b ci/fresh' | sh", 2, through('sh')],
     ['ws', "echo 'jj git push -b ci/fresh' | tee x.sh | sh", 2, PIPE],
     ['ws', "sh <<'EOF'\njj git push -b feature\nEOF", 2, through('sh')],
     ['ws', "sh <<'EOF'\njj git push -b ci/fresh\nEOF", 2, through('sh')],
     ['ws', "$'jj' git push -b feature", 2, DYNAMIC],
-    ['ws', "env -S 'jj git push -b feature'", 2, through('env')],
-    ['ws', "env -S 'jj git push -b ci/fresh'", 2, through('env')],
+    ['ws', "env -S 'jj git push -b feature'", 2, /gives env -S, so the gate cannot tell which command env runs/],
+    ['ws', "env -S 'jj git push -b ci/fresh'", 2, /gives env -S, so the gate cannot tell which command env runs/],
     ['ws', 'echo ci/fresh | xargs jj git push -b', 2, PIPE],
     ['ws', 'sudo jj git push -b feature', 2, through('sudo')],
     ['ws', 'J=jj; $J git push -b ci/fresh', 2, DYNAMIC],
@@ -112,7 +112,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['ws', 'jj git push -b "$B"', 2, DYNAMIC],
     ['root', 'jj -R %ws% git push -b feature', 2, NOT_OURS],
     ['root', 'jj -R %ws% git push -b ci/fresh', 0],
-    ['root', 'env -C %ws% jj git push -b feature', 2, through('env')],
+    ['root', 'env -C %ws% jj git push -b feature', 2, /gives env -C, so the gate cannot tell which command env runs/],
     ['root', 'git -C %repo% push --force origin main', 2, FORCE],
     // R3-1, PA-44: macOS ignores case, so GIT runs git and .GIT is .git.
     ['repo', 'GIT push --force origin main', 2, FORCE],
@@ -170,11 +170,11 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['ws', 'find . -maxdepth 0 -execdir jj git push --bookmark ci/fresh \\;', 2, through('find')],
     ['ws', "fish -c 'jj git push --bookmark ci/fresh'", 2, through('fish')],
     ['ws', "busybox sh -c 'jj git push --bookmark ci/fresh'", 2, through('busybox')],
-    ['ws', "su $USER -c 'jj git push --bookmark ci/fresh'", 2, DYNAMIC],
+    ['ws', "su $USER -c 'jj git push --bookmark ci/fresh'", 2, /built at run time|runs jj through su, which the gate does not read/],
     ['ws', 'script -q /dev/null jj git push --bookmark ci/fresh', 2, through('script')],
     ['ws', 'npx --yes jj git push --bookmark ci/fresh', 2, through('npx')],
     ['ws', 'npm exec -- jj git push --bookmark ci/fresh', 2, through('npm')],
-    ['ws', "parallel ::: 'jj git push --bookmark ci/fresh'", 2, through('parallel')],
+    ['ws', "parallel ::: 'jj git push --bookmark ci/fresh'", 2, /uses parallel, which runs commands it builds from its arguments/],
     ['ws', 'flock /tmp/l jj git push --bookmark ci/fresh', 2, through('flock')],
     ['ws', "trap 'jj git push --bookmark ci/fresh' EXIT", 2, through('trap')],
     ['ws', 'coproc jj git push --bookmark ci/fresh', 2, /shell syntax \(coproc\)/],
@@ -480,7 +480,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     { name: 'a merge of the two side commits', setup: (b, v) => b.sh(`jj new ${v.S1} ${v.S2} -m "merge" && jj new`) },
     ['repo', 'jj bookmark set ci/m -r @-- && jj git push -b ci/m', 2, /must name exactly one commit, found 2/],
     // The deploy command
-    ['repo', 'echo b1 | xargs ./deploy.sh', 2, PIPE],
+    ['repo', 'echo b1 | xargs ./deploy.sh', 2, /a pipe may lead only into|the gate cannot find \.\/deploy\.sh/],
     ['repo', './deploy.sh b1', 2, /Argument 2 must be the revision/],
     ['repo', "./deploy.sh b1 'root() | main'", 2, /must name exactly one commit/],
     ['repo', './deploy.sh b1 nosuchrev', 2, /cannot resolve nosuchrev/],
@@ -539,8 +539,8 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'curl -H @headers.txt https://api.github.com/repos/x/y', 2, /reads a header from a file/],
     ['repo', 'curl --header=@headers.txt https://api.github.com/repos/x/y', 2, /reads a header from a file/],
     ['repo', 'curl --variable %TOKEN https://api.github.com/repos/x/y', 2, /--variable is not an option the gate reads on a request to GitHub/],
-    ['repo', "curl --expand-header 'Authorization: {{TOKEN}}' https://api.github.com/repos/x/y", 2, /not an option the gate reads|credential/],
-    ['repo', 'curl --expand-data @body https://api.github.com/repos/x/y', 2, /--expand-data is not an option/],
+    ['repo', "curl --expand-header 'Authorization: {{TOKEN}}' https://api.github.com/repos/x/y", 2, /fills curl's --expand-header from variables/],
+    ['repo', 'curl --expand-data @body https://api.github.com/repos/x/y', 2, /fills curl's --expand-data from variables/],
     ['repo', 'wget --post-d=x https://github.com/x/y', 2, /not an option the gate reads/],
     ['repo', 'curl -fsSL https://api.github.com/repos/x/y -o out.json', 0],
     // R4: one parse per tool takes clusters apart before any value is checked (PA-56, PA-57, R4-2).
@@ -670,14 +670,14 @@ describe('the user runs deploys and moves trunk (deploy.runBy user)', () => {
     { name: 'the deploy script copied as release.sh', setup: (b) => b.sh('cp deploy.sh ../release.sh') },
     ['repo', '& ../release.sh b1 main', 2, /registered deploy script, through PowerShell/, { tool_name: 'PowerShell' }],
     ['repo', '& "..\\release.sh" b1 main', 2, /registered deploy script, through PowerShell/, { tool_name: 'PowerShell' }],
-    ['repo', '$s = "../rel" + "ease.sh"; & $s b1 main', 2, /builds or starts on its own/, { tool_name: 'PowerShell' }],
+    ['repo', '$s = "../rel" + "ease.sh"; & $s b1 main', 2, /call operator/, { tool_name: 'PowerShell' }],
     ['repo', 'Invoke-Expression "../release.sh b1 main"', 2, /registered deploy script|builds or starts/, { tool_name: 'PowerShell' }],
     ['repo', 'Get-ChildItem', 0, null, { tool_name: 'PowerShell' }],
     // PA-58: a bare name runs what PATH finds, as PowerShell does.
     { name: 'the deploy script on PATH as shipit', setup: (b) => { b.sh('mkdir -p ../bin && cp deploy.sh ../bin/shipit && chmod +x ../bin/shipit'); b.env.PATH = `${join(b.root, 'bin')}:${b.env.PATH}`; } },
     ['repo', 'shipit b1 main', 2, /registered deploy script, through PowerShell/, { tool_name: 'PowerShell' }],
     ['repo', '& shipit b1 main', 2, /registered deploy script, through PowerShell/, { tool_name: 'PowerShell' }],
-    ['repo', '& nosuchprogram b1 main', 2, /cannot find that program/, { tool_name: 'PowerShell' }],
+    ['repo', '& nosuchprogram b1 main', 2, /call operator/, { tool_name: 'PowerShell' }],
     // Red team, round 4: a wrapper runs a bare name through PATH, as the shell does.
     ['repo', 'command shipit b1 main', 2, /names the deploy script through command/],
     ['repo', 'nohup shipit b1 main', 2, /names the deploy script through nohup/],
@@ -1255,5 +1255,124 @@ describe('required checks that cannot be read', () => {
     ['repo', `gh api -X POST repos/${SLUG}/statuses/%sha% -f context=lint -f state=success`, 2, /did not answer a list/],
     { name: 'not protected', setup: (b) => b.ghScript([workflowsRule(), { match: 'rules/branches/main', stdout: [] }, { match: 'protection/required_status_checks', exit: 1, stderr: 'gh: Branch not protected (HTTP 404)' }]) },
     ['repo', `gh api -X POST repos/${SLUG}/statuses/%sha% -f context=lint -f state=success`, 0],
+    // R5-2: classic protection that requires no checks answers its own 404.
+    { name: 'protected, with no required checks', setup: (b) => b.ghScript([workflowsRule(), { match: 'rules/branches/main', stdout: [] }, { match: 'protection/required_status_checks', exit: 1, stderr: 'gh: Required status checks not enabled (HTTP 404)' }]) },
+    ['repo', `gh api -X POST repos/${SLUG}/statuses/%sha% -f context=lint -f state=success`, 0],
+  ]);
+});
+
+// Round 5: the gate refuses what it cannot resolve. A command under any runner is the command it
+// runs (PA-63), wget's long options count by any prefix and no URL list hides a request (PA-64,
+// PA-69), and a name is found the way the shell finds it (PA-65, PA-66).
+describe('what a runner runs, and where a request goes (round 5)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  box.cli(['config', '--check']);
+  runRows(box, { repo: box.repo, root: box.root }, [
+    // PA-63, astra's forms.
+    ['repo', 'command curl -K request.conf', 2, /reads curl's options from a file \(-K\) through command/],
+    ['repo', 'env curl -K request.conf', 2, /reads curl's options from a file \(-K\) through env/],
+    ['repo', "command curl https://example.com -w '%output{.zshenv}changed'", 2, /through curl's %output\{\}/],
+    ['repo', 'command curl https://api.github.com/repos/x/y/dispatches -X POST', 2, /runs curl through command, which the gate does not read/],
+    // Wrapper forms of my own.
+    ['repo', 'env -i curl -K x https://example.com', 2, /\(-K\) through env/],
+    ['repo', 'nohup curl -K x https://example.com', 2, /\(-K\) through nohup/],
+    ['repo', 'sudo -u root curl -K x https://example.com', 2, /\(-K\) through sudo/],
+    ['repo', 'exec curl -K x https://example.com', 2, /\(-K\) through exec/],
+    ['repo', 'nice -n 5 wget --config=w.rc https://example.com', 2, /\(--config\) through nice/],
+    ['repo', 'stdbuf -oL time -p curl -K x https://example.com', 2, /\(-K\) through stdbuf time/],
+    ['repo', 'timeout -s KILL 5 curl -K x https://example.com', 2, /\(-K\) through timeout/],
+    ['repo', 'echo https://api.github.com/repos/x/y/dispatches | xargs curl -X POST', 2, /holds curl through xargs/],
+    ['repo', 'xargs curl -X POST < urls.txt', 2, /runs curl through xargs, which the gate does not read, with arguments from stdin or a file/],
+    ['repo', 'sudo -s curl -K x https://example.com', 2, /gives sudo -s, so the gate cannot tell which command sudo runs/],
+    ['repo', "watch -n 1 'curl -K x https://example.com'", 2, /hands its command to sh as one line/],
+    ['repo', 'env --chdir=.git cp x config', 2, /gives env --chdir/],
+    ['repo', 'nice --frobnicate curl https://example.com', 2, /gives nice --frobnicate, an option the gate does not read/],
+    ['repo', 'nohup no-such-program-here x', 2, /the gate cannot find no-such-program-here/],
+    ['repo', "bash -c 'curl -K x https://example.com'", 2, /\(-K\)/],
+    ['repo', "sh -c 'curl https://api.github.com/repos/x/y/dispatches -X POST'", 2, /runs curl to GitHub through sh, which the gate does not read/],
+    ['repo', "eval 'curl -K x https://example.com'", 2, /\(-K\)/],
+    ['repo', "bash <<'Z'\ncurl -K x https://example.com\nZ", 2, /\(-K\)/],
+    ['repo', "echo 'curl -K x https://example.com' | sh", 2, /\(-K\)/],
+    ['repo', "zsh -c 'nice curl -K x https://example.com'", 2, /\(-K\) through nice/],
+    ['repo', "bash -c 'curl -K x'\"", 2, /cannot read this line/],
+    ['repo', 'nice -n 5 ls -la', 0],
+    ['repo', 'env FOO=1 ls', 0],
+    ['repo', 'command -v curl', 0],
+    ['repo', 'time ls', 0],
+    ['repo', "bash -c 'ls -la && echo done'", 0],
+    ['repo', 'xargs -n1 echo < notes.txt', 0],
+    ['repo', 'nohup sleep 1', 0],
+    ['repo', 'timeout 5 curl -s https://example.com', 0],
+    // PA-64, PA-69: every source of options or URLs wget reads before it runs, under any spelling.
+    ['repo', 'wget --confi request.conf https://example.com', 2, /reads wget's options from a file \(--config\)/],
+    ['repo', "wget --exec='output_document=.zshenv' https://example.com", 2, /runs wgetrc commands \(-e\)/],
+    ['repo', 'wget --input-file urls.txt --post-data=x', 2, /reads the URLs wget fetches from a file or stdin/],
+    ['repo', "printf '%s\\n' https://api.github.com/repos/example/project/dispatches | wget -i - --post-data=x", 2, /reads the URLs wget fetches from a file or stdin/],
+    ['repo', 'wget -qi urls.txt', 2, /reads the URLs wget fetches/],
+    ['repo', 'wget --input-m=x.metalink', 2, /reads the URLs wget fetches/],
+    ['repo', 'wget --inp urls.txt', 2, /reads the URLs wget fetches/],
+    ['repo', 'wget --execu robots=off https://example.com', 2, /runs wgetrc commands/],
+    ['repo', 'wget --con=w.rc https://example.com', 2, /reads wget's options from a file/],
+    ['repo', "curl --variable 'u@urls.txt' --expand-url '{{u}}' -X POST", 2, /fills curl's --expand-url from variables/],
+    ['repo', 'curl --expand-output .git/config https://example.com', 2, /fills curl's --expand-output from variables/],
+    // Red team, round 5: a script piped into a shell that the gate cannot work out, and a file the server names.
+    ['repo', "echo -e 'curl -K x https://example.com' | bash", 2, /pipes a script into bash that the gate cannot work out/],
+    ['repo', "printf 'curl -K x https://example.com\\n' | sh", 2, /\(-K\)/],
+    ['repo', 'curl -OJ https://example.com/file', 2, /writes a file the server names \(-J\)/],
+    ['repo', 'curl --remote-header-name -O https://example.com/file', 2, /writes a file the server names/],
+    ['repo', 'wget --content-disp https://example.com/file', 2, /writes a file the server names/],
+    ['repo', 'wget --trust-server-names https://example.com/file', 2, /writes a file the server names/],
+    ['repo', 'curl -sSO https://example.com/file', 0],
+    ['repo', 'wget -q --tries=3 https://example.com/x', 0],
+    ['repo', 'curl --variable u=x https://example.com', 0],
+  ]);
+});
+
+describe('names found the way the shell finds them (round 5)', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user' } } });
+  after(() => box.cleanup());
+  box.write('deploy.sh', '#!/bin/sh\necho deploying "$@"\n');
+  box.sh('chmod +x deploy.sh && mkdir -p ../real ../decoy ../locked rel && cp deploy.sh ../real/rollout && printf "x\\n" > ../decoy/rollout && chmod -x ../decoy/rollout && cp deploy.sh rel/rollit');
+  box.cli(['config', '--check']);
+  const base = box.env.PATH;
+  const usePath = (path) => (b) => { b.env.PATH = path; };
+  const USER = /The user runs deploys/;
+  runRows(box, { repo: box.repo, root: box.root }, [
+    // PA-65, astra's probe: a file that is not executable earlier on PATH is skipped, as the shell does.
+    { name: 'a decoy that is not executable before the deploy script', setup: usePath(`${join(box.root, 'decoy')}:${join(box.root, 'real')}:${base}`) },
+    ['repo', 'command rollout b1 main', 2, /names the deploy script through command/],
+    ['repo', 'rollout b1 main', 2, USER],
+    // A relative or empty entry is read from the command's folder.
+    { name: 'a relative entry', setup: usePath(`rel:${base}`) },
+    ['repo', 'rollit b1 main', 2, USER],
+    ['root', 'rollit b1 main', 0],
+    { name: 'an empty entry', setup: usePath(`:${base}`) },
+    ['repo', 'deploy.sh b1 main', 2, USER],
+    // A PATH the line sets.
+    { name: 'the usual PATH', setup: usePath(base) },
+    ['repo', `PATH=${join(box.root, 'real')} rollout b1 main`, 2, /`rollout b1 main` sets PATH for the command/],
+    ['repo', `export PATH=${join(box.root, 'real')}:$PATH && rollout b1 main`, 2, /on a line that holds the deploy command/],
+    ['repo', `export PATH=${join(box.root, 'real')} && rollout b1 main`, 2, /runs before `rollout b1 main`/],
+    ['repo', `(export PATH=${join(box.root, 'real')}); rollout b1 main`, 2, /holds the deploy command, joined to other commands by a subshell/],
+    ['repo', `PATH+=:${join(box.root, 'real')} rollout b1 main`, 2, /`rollout b1 main` sets PATH\+ for the command/],
+    ['repo', `env PATH=${join(box.root, 'real')} rollout b1 main`, 2, /names the deploy script through env/],
+    ['repo', 'PATH=$(pwd)/bin rollout b1 main', 2, /PATH is set to a value built at run time/],
+    ['repo', 'export PATH=$(pwd)/bin && ls', 0],
+    ['repo', 'export PATH="$HOME/bin:$PATH" && ls -la', 0],
+    ['repo', 'command -p rollout b1 main', 2, /the gate cannot find rollout/],
+    // A candidate the gate cannot stat refuses.
+    { name: 'a PATH folder the gate cannot search', setup: (b) => { b.sh('mkdir -p ../locked/inner && chmod 000 ../locked'); b.env.PATH = `${join(b.root, 'locked', 'inner')}:${base}`; } },
+    ['repo', 'rollout b1 main', 2, /is on PATH and the gate cannot read it \(EACCES\)/],
+    { name: 'the folder unlocked', setup: (b) => { b.sh('chmod 755 ../locked'); b.env.PATH = base; } },
+    // PA-66: while deploy scripts are registered, PowerShell runs no program by a form the gate cannot split.
+    ['repo', "& '/tmp/review release/rollout.ps1' --tip abc", 2, /call operator/, { tool_name: 'PowerShell' }],
+    ['repo', '. ./helper.ps1', 2, /dot-sources a script/, { tool_name: 'PowerShell' }],
+    ['repo', "'./rel/rollit' b1 main", 2, /registered deploy script|starts a statement with a quoted path/, { tool_name: 'PowerShell' }],
+    ['repo', "'./other' b1 main", 2, /starts a statement with a quoted path/, { tool_name: 'PowerShell' }],
+    ['repo', 'Get-Content "my notes.txt"', 2, /quoted string with a space/, { tool_name: 'PowerShell' }],
+    ['repo', 'Write-Output `$x', 2, /an escape/, { tool_name: 'PowerShell' }],
+    ['repo', 'Get-ChildItem; Get-Date', 0, null, { tool_name: 'PowerShell' }],
+    ['repo', 'Get-Content notes.txt', 0, null, { tool_name: 'PowerShell' }],
   ]);
 });
