@@ -160,6 +160,7 @@ export const ALL_WORKFLOWS = [
   { id: 13, name: 'cd', path: '.github/workflows/cd.yml', state: 'active' },
   { id: 14, name: 'Twin', path: '.github/workflows/twin-a.yml', state: 'active' },
   { id: 15, name: 'Twin', path: '.github/workflows/twin-b.yml', state: 'active' },
+  { id: 16, name: 'Deploy staging', path: '.github/workflows/deploy-staging.yml', state: 'active' },
 ];
 export const workflowsRule = (list = WORKFLOWS) => ({ match: 'actions/workflows?per_page=100', stdout: { total_count: list.length, workflows: list } });
 
