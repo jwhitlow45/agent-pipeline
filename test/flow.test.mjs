@@ -85,6 +85,30 @@ describe('intake, briefs and design', () => {
   });
 });
 
+// PA-49: a note bound to the user's skip could never take a real review of its changed text.
+describe('a design bound to a skip', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  const consensus = (topic, rounds) => writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, `${topic}.json`), JSON.stringify({ topic, repo: null, identity: null, folder: join(box.root, `review-${topic}`), status: 'consensus', rounds: Array.from({ length: rounds }, (_, n) => ({ n: n + 1 })), consensus: { tip: null, commits: [], reviewers: 'a, b', rounds } }));
+
+  test('takes a consensus of the run\'s own design review for the changed note, and no other topic\'s', () => {
+    mkdirSync(box.env.AGENT_REVIEW_LEDGER, { recursive: true });
+    box.cli(['intake', '--run', 'skp', '--words', WORDS, '--ui']);
+    box.write('docs/design-skp.md', '# Skip\n## Rules\n## UI and UX\n## Build plan\n## Tests\n');
+    assert.equal(box.cli(['design', '--run', 'skp', '--note', 'docs/design-skp.md', '--review-topic', 'skpdesign']).code, 0);
+    const skipped = box.cli(['design', '--run', 'skp', '--note', 'docs/design-skp.md', '--review-skip', 'The user said to skip the design review.']);
+    assert.equal(skipped.code, 0, skipped.all);
+    assert.equal(box.run('skp').stages.design.reviewed.kind, 'skip');
+    box.write('docs/design-skp.md', '# Skip\n## Rules\n## UI and UX\n## Build plan\n## Tests\nA change the review saw.\n');
+    consensus('otherskp', 3);
+    assert.match(box.cli(['design', '--run', 'skp', '--note', 'docs/design-skp.md', '--review-topic', 'otherskp', '--re-review']).out, /needs a newer consensus of this run's design review/);
+    consensus('skpdesign', 2);
+    const reviewed = box.cli(['design', '--run', 'skp', '--note', 'docs/design-skp.md', '--re-review']);
+    assert.equal(reviewed.code, 0, reviewed.all);
+    assert.deepEqual([box.run('skp').stages.design.reviewed.kind, box.run('skp').stages.design.reviewed.topic], ['review', 'skpdesign']);
+  });
+});
+
 describe('build lanes', () => {
   const box = sandbox({ config: { ...baseConfig, fastLane: { maxFiles: 3 } } });
   after(() => box.cleanup());
