@@ -48,16 +48,27 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
   box.sh(`jj bookmark set feature ci/dark ci/fresh -r ${tip} && jj tag set v1 -r main`);
   box.sh('jj bookmark set ci/wc -r @', ws);
   box.sh(`git init -q --bare ${JSON.stringify(join(box.root, 'fork.git'))} && jj git remote add fork ${JSON.stringify(join(box.root, 'fork.git'))}`);
-  box.sh('jj config set --repo aliases.pp \'["git", "push"]\' && git config alias.p push');
+  box.sh('jj config set --repo aliases.pp \'["git", "push"]\' && jj config set --repo aliases.loop \'["loop"]\' && jj config set --repo aliases.weird \'"log"\'');
+  box.sh("git config alias.p push && git config alias.sp '!git push origin main' && git config alias.hp '-c core.hooksPath=/dev/null push'");
+  // A conflicted bookmark: two operations set it from the same starting point.
+  box.sh(`jj bookmark set ci/conf -r main && op=$(jj op log -n 1 --no-graph -T 'id.short()') && jj bookmark set ci/conf -r ${tip} && jj --at-op $op bookmark set ci/conf -r ${S1} && jj st >/dev/null`);
+  // A run whose design note failed its checks, with its review topic registered.
+  box.cli(['intake', '--run', 'dsg', '--words', 'Design something.']);
+  box.write('../bad-note.md', '# Note\n');
+  box.cli(['design', '--run', 'dsg', '--note', '../bad-note.md', '--review-topic', 'dsgtopic']);
   box.ghScript([
     { match: 'pr view 6 ', stdout: { baseRefName: 'main', headRefName: 'ci/dark', headRefOid: 'a'.repeat(40), isDraft: false } },
     { match: 'pr view 7 ', stdout: { baseRefName: 'main', headRefName: 'ci/dark', headRefOid: tip, isDraft: false } },
     { match: 'pr view 8 ', stdout: { baseRefName: 'ci/base', headRefName: 'ci/dark', headRefOid: tip, isDraft: false } },
     { match: 'git/ref/heads/ci/moved', stdout: { object: { type: 'commit', sha: S2 } } },
+    { match: 'git/ref/heads/ci/nobranch', exit: 1, stderr: 'gh: Not Found (HTTP 404)' },
+    { match: 'git/ref/heads/ci/both', stdout: { object: { type: 'commit', sha: tip } } },
+    { match: 'git/ref/tags/ci/both', stdout: { object: { type: 'commit', sha: tip } } },
     { match: 'git/ref/tags/', exit: 1, stderr: 'gh: Not Found (HTTP 404)' },
+    { match: `run view 11 -R ${SLUG}`, stdout: { workflowName: 'Deploy production' } },
     { match: `run view 5 -R ${SLUG}`, stdout: { workflowName: 'Deploy' } },
     { match: `run view 9 -R ${SLUG}`, stdout: { workflowName: 'CI' } },
-    { match: 'alias list', stdout: '' },
+    { match: 'alias list', stdout: "dep:\t'!gh workflow run deploy.yml --ref main'\na1:\ta2\na2:\ta1\n" },
   ]);
   Object.assign(values, { ws, tip, S1, S2, tip12: tip.slice(0, 12) });
 
@@ -89,6 +100,16 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['ws', 'jj --config git.push=fork git push -b ci/fresh', 2, /git\.push/],
     ['ws', 'jj --config-file ../x.toml git push -b ci/fresh', 2, /config-file/],
     ['ws', 'JJ_CONFIG=../x.toml jj git push -b ci/fresh', 2, /JJ_CONFIG/],
+    ['ws', 'JJ_CONFIG=../x.toml jj pp -b ci/fresh', 2, /cannot read the jj alias pp as jj will/],
+    ['ws', 'JJ_CONFIG=../x.toml jj log', 0],
+    ['ws', 'jj loop', 2, /expand more than five times/],
+    ['ws', 'jj weird', 2, /cannot read the jj alias weird/],
+    ['ws', 'jj "$SUB" -b ci/fresh', 2, /jj subcommand is built at run time/],
+    ['repo', 'git sp', 2, /git alias sp, a shell command/],
+    ['repo', 'git hp origin %tip%:refs/heads/ci/x', 2, /git alias hp sets core\.hooksPath/],
+    ['repo', 'git "$SUB" origin main', 2, /git subcommand is built at run time/],
+    ['repo', 'cd "$X" && git push origin main', 2, /Could not tell which directory/],
+    ['repo', "echo \"require('child_process').execSync('git push origin main')\" | node", 2, /node reading its program from stdin/],
     ['ws', 'jj pp -b feature', 2, NOT_OURS],
     ['repo', 'git p origin %tip%:refs/heads/feature', 2, NOT_OURS],
     ['repo', 'git psuh origin main', 2, /autocorrect/],
@@ -111,6 +132,13 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['ws', "jj git push --named 'ci/z=description(substring:\"a=b\") | @-'", 0],
     ['ws', 'jj git push --named feature2=@-', 2, NOT_OURS],
     ['ws', 'jj git push -b ci/nothere', 2, /points nowhere/],
+    ['ws', 'jj --at-op @- git push -b ci/fresh', 2, /earlier operation/],
+    ['ws', 'jj git push -b ci/fresh --allow-new', 2, /does not know/],
+    ['ws', 'jj git push -b', 2, /missing its value/],
+    ['ws', "jj git push --named '=@-'", 2, /--named takes NAME=REVISION/],
+    ['ws', "jj git push --named 'ci/two=@- | @--'", 2, /must name exactly one commit/],
+    ['ws', "jj git push --named 'ci/z=nosuchrev'", 2, /cannot resolve nosuchrev/],
+    ['ws', 'jj git push -b ci/conf', 2, /conflicted/],
     ['ws', 'jj git push -b ci/fresh --revision @-', 2, /feature: feature is not a branch/],
     ['ws', 'jj git push -b ci/fresh -t v1', 2, /pushes tags/],
     ['repo', 'jj git push -r main', 2, /also pushes a tag/],
@@ -146,7 +174,23 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'git push --dry-run --no-dry-run --force origin main', 2, FORCE],
     ['repo', 'git push -vf origin ci/side', 2, FORCE],
     ['repo', 'git push origin ci/side', 2, FORCE],
-    ['repo', 'git push origin tag v1', 2, /tag/],
+    ['repo', 'git push origin tag v1', 2, /It pushes a tag/],
+    ['repo', 'echo x | xargs git push origin', 2, /xargs adds arguments/],
+    ['repo', 'git --git-dir=.git push origin %tip%:refs/heads/ci/x', 2, /another repository or program/],
+    ['repo', 'git push --all origin', 2, /more than the named branches/],
+    ['repo', 'git push --receive-pack=x origin %tip%:refs/heads/ci/x', 2, /another program on the remote/],
+    ['repo', 'git push --recurse-submodules=on-demand origin %tip%:refs/heads/ci/x', 2, /submodules/],
+    ['repo', 'git push', 2, /wherever git picks/],
+    ['repo', 'git push fork %tip%:refs/heads/ci/x', 2, /pushes to fork/],
+    ['repo', 'git push origin', 2, /whatever git picks/],
+    ['repo', "git push origin 'refs/heads/*:refs/heads/*'", 2, /pattern or a negative refspec/],
+    ['repo', 'git push origin %tip%:refs/notes/x', 2, /is not a branch/],
+    ['repo', 'git push origin %tip%:refs/heads/', 2, /cannot tell which branch/],
+    ['repo', 'git push origin HEAD', 2, /has no branch name of its own/],
+    ['repo', 'git push origin nosuchref:refs/heads/ci/x', 2, /cannot tell which commit nosuchref is/],
+    ['repo', 'git push origin :main', 2, /Agents never delete trunk/],
+    ['repo', 'git push origin :release', 2, /It deletes release, which is not a branch agents push to/],
+    ['repo', 'git push origin :ci/gone', 0],
     ['repo', 'git push --dry-run origin HEAD:refs/heads/ci/x', 0],
     ['repo', 'git push origin %tip%:refs/heads/ci/x', 0],
     // PA-05, PO-9, P1-7, P2-8: pull requests, statuses and gh api writes
@@ -169,6 +213,39 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'gh workflow run deploy.yml --ref ci/moved', 2, /last saw it/],
     ['repo', 'gh workflow run release.yml -fenvironment=production', 2, /production deploy/],
     ['repo', `gh api repos/${SLUG}/actions/workflows/123/dispatches --input request.json`, 2, /gh workflow run 123/],
+    ['repo', 'gh workflow run deploy.yml -R "$R" --ref ci/dark', 2, /--repo is built at run time/],
+    ['repo', 'GH_REPO=$R gh run rerun 5', 2, /GH_REPO is built at run time/],
+    ['repo', 'cd "$X" && gh workflow run deploy.yml --ref ci/dark', 2, /cannot tell which repository it acts on/],
+    ['repo', 'gh "$C" run', 2, /gh command is built at run time/],
+    ['repo', 'gh dep', 2, /gh alias dep, a shell command/],
+    ['repo', 'gh a1', 2, /expand too many times/],
+    ['repo', 'echo deploy.yml | xargs gh workflow run', 2, /xargs adds arguments/],
+    ['repo', 'gh workflow run deploy.yml -F environment=@env.txt', 2, /read from a file/],
+    ['repo', 'gh workflow run deploy.yml', 2, /Pass --ref/],
+    ['repo', 'gh workflow run deploy.yml --ref ci/nobranch', 2, /is not a branch on/],
+    ['repo', 'gh workflow run deploy.yml --ref ci/both', 2, /names both a branch and a tag/],
+    ['repo', 'gh run rerun', 2, /Name the run ID/],
+    ['repo', 'gh run rerun 11', 2, /production deploy/],
+    ['repo', `gh api -X "$M" repos/${SLUG}/statuses/x`, 2, /method is built at run time/],
+    ['repo', 'gh api graphql -F query=@q.graphql', 2, /query is read from a file/],
+    ['root', 'gh api -X POST repos/{owner}/{repo}/dispatches', 2, /placeholders need a repository/],
+    ['repo', `gh api -X POST repos/${SLUG}/actions/workflows/deploy-prod.yml/dispatches -f ref=main`, 2, /production deploy/],
+    ['repo', `gh api -X POST repos/${SLUG}/deployments -f ref=main`, 2, /records or starts a deployment/],
+    ['repo', `gh api -X PUT repos/${SLUG}/contents/README.md -f message=x -f content=eA==`, 2, /commits on GitHub/],
+    ['repo', `gh api -X POST repos/${SLUG}/pulls -f head=ci/x -f base=main -f title=x`, 2, /gh pr create --draft/],
+    ['repo', `gh api -X POST repos/${SLUG}/pulls -f head=ci/x -f base=main -F draft=true`, 0],
+    ['repo', 'echo 7 | xargs gh pr merge', 2, /xargs adds arguments/],
+    ['repo', 'gh pr create --head ci/nobranch --title x', 2, /is not a branch on/],
+    ['repo', 'gh pr merge --squash', 2, /Name the pull request/],
+    ['repo', 'agent-review start --topic dsgtopic', 2, /design note of run dsg has not passed/],
+    // The deploy command
+    ['repo', 'echo b1 | xargs ./deploy.sh', 2, /xargs adds arguments/],
+    ['repo', './deploy.sh b1', 2, /Argument 2 must be the revision/],
+    ['repo', "./deploy.sh b1 'root() | main'", 2, /must name exactly one commit/],
+    ['repo', './deploy.sh b1 nosuchrev', 2, /cannot resolve nosuchrev/],
+    ['repo', './deploy.sh b1 @', 2, /working-copy commit/],
+    { name: 'push a tag, then delete it locally', setup: (b) => b.sh('jj tag set v2 -r main && jj git push -t v2 && jj tag delete v2') },
+    ['repo', 'jj git push --deleted', 2, /also deletes tags/],
     // P2-7: other tools that run commands
     ['ws', 'jj git push -b feature', 2, /PowerShell/, { tool_name: 'PowerShell' }],
     ['ws', 'Get-ChildItem', 0, null, { tool_name: 'PowerShell' }],
@@ -180,6 +257,9 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     // PA-03: trunk moves only forward
     { name: 'push main to the tip', setup: (b) => b.sh('jj git push -b main') },
     ['repo', 'jj bookmark set main -r %S1% --allow-backwards && jj git push -b main', 2, /force push of trunk/],
+    // git finds its repository from the folder, which can be another repository inside this one.
+    { name: 'a git repository nested in the lane workspace', setup: (b, v) => b.sh('git init -q inner', v.ws) },
+    ['ws', 'cd inner && git push origin HEAD:refs/heads/ci/x', 2, /not this repository's/],
   ]);
 
   test('gh run rerun -R another repository never reads the run in this one', () => {
@@ -199,6 +279,7 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     const sideways = hook(`refs/heads/ci/side ${values.S2} refs/heads/ci/side ${values.S1}\n`);
     assert.equal(sideways.code, 1);
     assert.match(sideways.err, /force push/);
+    assert.match(box.cli(['git-pre-push', '--remote', 'fork'], { input: `refs/heads/ci/x ${values.tip} refs/heads/ci/x ${'0'.repeat(40)}\n` }).err, /agents push only to origin/);
     const unknown = hook(`refs/heads/ci/side ${values.S2} refs/heads/ci/side ${'f'.repeat(40)}\n`);
     assert.equal(unknown.code, 1);
     assert.match(unknown.err, /Fetch first/);
@@ -262,3 +343,10 @@ describe('the push remote comes from jj\'s git.push setting', () => {
     ['repo', 'jj git push --remote origin -b ci/x', 2, UNSCANNED],
   ]);
 });
+
+describe('a deploy command without deploy.tipArg', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, tipArg: null } } });
+  after(() => box.cleanup());
+  runRows(box, { repo: box.repo }, [['repo', './deploy.sh b1 main', 2, /Set deploy.tipArg/]]);
+});
+
