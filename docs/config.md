@@ -116,7 +116,7 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 | `deploy.requiredChecks` | backup, health, load, http | What `deploy record` must be given. `restarts` may be added. |
 | `deploy.healthyValues` | healthy, ok | |
 | `deploy.deployWorkflows` | `"deploy"` | A regex over a workflow's file path and display name for the workflows that deploy. A workflow whose file names an `environment:` deploys too. Name every deploy workflow so one of these holds. |
-| `deploy.allowedWorkflows` | `[]` | Under `runBy: "user"`, the workflows agents may still dispatch or rerun, by file path (`.github/workflows/lint.yml`). Every other workflow is the user's. |
+| `deploy.allowedWorkflows` | `[]` | Under `runBy: "user"`, the workflows agents may still dispatch or rerun, by file path (`.github/workflows/lint.yml`). Every other workflow is the user's. A deploy workflow on the list is checked as any deploy is, and a production one is still refused. |
 | `deploy.prodPattern` | prod or production as a word | Workflows and environments agents never run, matched against a workflow's path, name, the `environment:` values its file names on trunk, and its inputs. |
 | `notify.command` | `null` | An argument list with `{message}`, such as `["agent-notify", "{message}"]`, or a shell string that gets the message as `$1`. |
 
