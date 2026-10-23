@@ -73,6 +73,9 @@ describe('intake, briefs and design', () => {
     // The binding survives the refusal: trying again, or claiming a re-review, changes nothing.
     assert.equal(box.cli(['design', '--run', 'feat', '--note', 'docs/design-dark.md']).code, 1);
     assert.match(box.cli(['design', '--run', 'feat', '--note', 'docs/design-dark.md', '--re-review']).out, /needs a consensus newer than the one the note was bound to \(round 2 of darkdesign\)/);
+    // Another review's consensus, however recent, says nothing about this note.
+    writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, 'otherdesign.json'), JSON.stringify({ topic: 'otherdesign', repo: null, identity: null, folder: join(box.root, 'review-other'), status: 'consensus', rounds: [{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }], consensus: { tip: null, commits: [], reviewers: 'a, b', rounds: 4, at: '2099-01-01T00:00:00Z' } }));
+    for (let attempt = 0; attempt < 2; attempt++) assert.match(box.cli(['design', '--run', 'feat', '--note', 'docs/design-dark.md', '--review-topic', 'otherdesign', '--re-review']).out, /needs a newer consensus of this run's design review, darkdesign, not of otherdesign/);
     writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, 'darkdesign.json'), JSON.stringify({ topic: 'darkdesign', repo: null, identity: null, folder: join(box.root, 'review-darkdesign'), status: 'consensus', rounds: [{ n: 1 }, { n: 2 }, { n: 3 }], consensus: { tip: null, commits: [], reviewers: 'model-a xhigh, model-b xhigh', rounds: 3 } }));
     const again = box.cli(['design', '--run', 'feat', '--note', 'docs/design-dark.md', '--re-review']);
     assert.equal(again.code, 0, again.all);
