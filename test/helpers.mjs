@@ -1,5 +1,5 @@
 // Test sandboxes: a temporary jj repository whose origin looks like a GitHub repository but is a
-// local bare repository (git's pushInsteadOf sends pushes there), its own ledger folders, a jj config that
+// local bare repository (git's insteadOf sends fetches and pushes there), its own ledger folders, a jj config that
 // does not sign, and the fake gh. Nothing touches the user's real state or GitHub.
 
 import assert from 'node:assert/strict';
@@ -13,8 +13,35 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 export const CLI = join(ROOT, 'bin', 'pipeline.mjs');
 export const SLUG = 'example-owner/demo';
 
+// Every temporary folder a test makes is removed when the test process ends, however it ends: a
+// describe's after hook removes its own, and the exit and signal handlers remove the rest, so a
+// failing, timed-out or killed run leaves nothing behind.
+const temporary = new Set();
+const removeAll = () => {
+  for (const dir of temporary) rmSync(dir, { recursive: true, force: true });
+  temporary.clear();
+};
+process.on('exit', removeAll);
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(signal, () => {
+    removeAll();
+    process.exit(128 + ({ SIGINT: 2, SIGTERM: 15, SIGHUP: 1 })[signal]);
+  });
+}
+
+export function tempDir(prefix) {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  temporary.add(dir);
+  return dir;
+}
+
+export function removeTemp(dir) {
+  rmSync(dir, { recursive: true, force: true });
+  temporary.delete(dir);
+}
+
 export function sandbox({ config = {}, local = null } = {}) {
-  const root = mkdtempSync(join(tmpdir(), 'pipeline-test-'));
+  const root = tempDir('pipeline-test-');
   const repo = join(root, 'demo');
   const bare = join(root, 'remote.git');
   const env = {
@@ -35,7 +62,7 @@ export function sandbox({ config = {}, local = null } = {}) {
   delete env.NODE_TEST_CONTEXT;
   chmodSync(env.PIPELINE_GH, 0o755);
   writeFileSync(env.JJ_CONFIG, '[user]\nname = "Test"\nemail = "test@example.com"\n[signing]\nbehavior = "drop"\n[ui]\npaginate = "never"\n');
-  writeFileSync(env.GIT_CONFIG_GLOBAL, `[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[url "${bare}"]\n\tpushInsteadOf = https://github.com/${SLUG}.git\n`);
+  writeFileSync(env.GIT_CONFIG_GLOBAL, `[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[url "${bare}"]\n\tinsteadOf = https://github.com/${SLUG}.git\n`);
   writeFileSync(env.FAKE_GH_LOG, '');
   const sh = (command, cwd = repo, extra = {}) => {
     const result = spawnSync('sh', ['-c', command], { cwd, env: { ...env, ...extra }, encoding: 'utf8' });
@@ -81,7 +108,7 @@ export function sandbox({ config = {}, local = null } = {}) {
     statusCalls() { return box.ghCalls().filter((args) => args[0] === 'api' && /\/statuses\//.test(args.join(' '))).map((args) => Object.fromEntries(args.filter((arg, i) => args[i - 1] === '-f').map((field) => field.split(/=(.*)/s).slice(0, 2)))); },
     run(id) { return JSON.parse(readFileSync(join(env.AGENT_PIPELINE_STATE, 'runs', `${id}.json`), 'utf8')); },
     gate(command, cwd = repo, payload = {}) { return box.cli(['gate'], { input: JSON.stringify({ tool_input: { command }, cwd, ...payload }) }); },
-    cleanup() { rmSync(root, { recursive: true, force: true }); },
+    cleanup() { removeTemp(root); },
     exists: (path) => existsSync(path),
   };
   return box;
@@ -123,6 +150,17 @@ export function builtRun(box, { run = 'dark', lane = 'a', intake = [] } = {}) {
 
 // The repository's workflows as GitHub lists them: CI is workflow 7, in ci.yml.
 export const WORKFLOWS = [{ id: 7, name: 'CI', path: '.github/workflows/ci.yml', state: 'active' }, { id: 8, name: 'Deploy', path: '.github/workflows/deploy.yml', state: 'active' }];
+// Every workflow the gate rows dispatch. Release is deploy-prod.yml under a display name that says
+// nothing of production, and Twin is a display name two workflows share.
+export const ALL_WORKFLOWS = [
+  ...WORKFLOWS,
+  { id: 9, name: 'Release', path: '.github/workflows/deploy-prod.yml', state: 'active' },
+  { id: 10, name: 'Release notes', path: '.github/workflows/release.yml', state: 'active' },
+  { id: 12, name: 'Lint', path: '.github/workflows/lint.yml', state: 'active' },
+  { id: 13, name: 'cd', path: '.github/workflows/cd.yml', state: 'active' },
+  { id: 14, name: 'Twin', path: '.github/workflows/twin-a.yml', state: 'active' },
+  { id: 15, name: 'Twin', path: '.github/workflows/twin-b.yml', state: 'active' },
+];
 export const workflowsRule = (list = WORKFLOWS) => ({ match: 'actions/workflows?per_page=100', stdout: { total_count: list.length, workflows: list } });
 
 export const ciScript = (tip, { jobs = [{ name: 'e2e (1)', status: 'completed', conclusion: 'success' }], conclusion = 'success' } = {}) => [

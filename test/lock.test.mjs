@@ -1,13 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { hostname, tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { guardOf, lockStep, withLock } from '../lib/lock.mjs';
+import { tempDir } from './helpers.mjs';
 
 const LIB = new URL('../lib/', import.meta.url).pathname;
-const fresh = () => mkdtempSync(join(tmpdir(), 'pipeline-lock-'));
+const fresh = () => tempDir('pipeline-lock-');
 const hold = (lock, owner) => {
   mkdirSync(lock);
   writeFileSync(join(lock, 'owner.json'), JSON.stringify({ host: hostname(), at: new Date().toISOString(), ...owner }));

@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tempDir } from './helpers.mjs';
 
-process.env.AGENT_PIPELINE_STATE = mkdtempSync(join(tmpdir(), 'pipeline-ledger-'));
+process.env.AGENT_PIPELINE_STATE = tempDir('pipeline-ledger-');
 const { createRun, loadRun, passed, requireStages, setStage, updateRun } = await import('../lib/ledger.mjs');
 
 test('a run is created once, with its intake event', () => {

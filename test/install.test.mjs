@@ -3,15 +3,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { tempDir } from './helpers.mjs';
 
 const REPO = new URL('..', import.meta.url).pathname;
 
 // A copy of the checkout in a folder whose name has a space and a quote, as a user's path might.
 function scratch() {
-  const base = realpathSync(mkdtempSync(join(tmpdir(), 'pipeline-install-')));
+  const base = realpathSync(tempDir('pipeline-install-'));
   const root = join(base, "agent pipeline's copy");
   for (const part of ['install.sh', 'bin', 'lib', 'codex', 'git-hooks', 'skills', 'pipeline.config.example.json', 'package.json']) cpSync(join(REPO, part), join(root, part), { recursive: true });
   const home = join(base, 'home');
@@ -69,4 +70,16 @@ test('another pipeline first on PATH is reported, and so is a hooks folder git d
   const linked = box.install(['--project', project]);
   assert.match(linked.stdout, /skip: .*pipeline.config.json exists/);
   assert.equal(readlinkSync(join(project, '.git', 'hooks', 'pre-push')), join(box.root, 'git-hooks', 'pre-push'));
+});
+
+test('a test run leaves the temporary folder as it found it, even when its tests fail, hang or are killed', () => {
+  const tmp = tempDir('pipeline-tmpcount-');
+  const fixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'temp-suite.mjs');
+  for (const mode of ['fail', 'kill', 'hang']) {
+    const env = { ...process.env, TMPDIR: tmp, TEMP_SUITE_MODE: mode };
+    delete env.NODE_TEST_CONTEXT;
+    const result = spawnSync(process.execPath, ['--test', '--test-timeout=3000', fixture], { env, encoding: 'utf8', timeout: 120_000 });
+    assert.notEqual(result.status, 0, `${mode}: the fixture suite should not pass`);
+    assert.deepEqual(readdirSync(tmp), [], `${mode} left ${readdirSync(tmp).join(', ')}`);
+  }
 });

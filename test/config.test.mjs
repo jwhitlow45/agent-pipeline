@@ -1,12 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DEFAULTS, loadConfig, privateStrings, warnings } from '../lib/config.mjs';
+import { tempDir } from './helpers.mjs';
 
 const dir = (files) => {
-  const root = mkdtempSync(join(tmpdir(), 'pipeline-config-'));
+  const root = tempDir('pipeline-config-');
   for (const [name, value] of Object.entries(files)) writeFileSync(join(root, name), typeof value === 'string' ? value : JSON.stringify(value));
   return root;
 };
