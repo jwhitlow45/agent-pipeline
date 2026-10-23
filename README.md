@@ -4,6 +4,36 @@ A delivery process for agent teams, written down and made checkable. A coordinat
 
 The `pipeline` CLI records each stage in a ledger, the way agent-review records reviews. It mirrors each stage to GitHub as a commit status (`pipeline/design`, `pipeline/build`, `pipeline/scan`, `pipeline/ci`, `pipeline/deploy`, `pipeline/live-play`, `pipeline/docs` and others), and its gate refuses a step whose earlier stages have not passed: a push before the pre-push scan, a deploy before review consensus and green CI on the exact commit, a code review before the build passed.
 
+## How it works
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/flow-dark.png">
+  <img src="docs/images/flow.png" alt="Flowchart of a run: intake, design or short spec, decision log, parallel lanes, checks, scan, push, CI, code review, deploy check, deploy, live play and docs, with the loops back to lanes." width="1399">
+</picture>
+
+From the user's request to shipped and documented. [Details](docs/diagrams.md#1-from-request-to-shipped-and-documented).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/review-loop-dark.png">
+  <img src="docs/images/review-loop.png" alt="Flowchart of the review round loop: reviewers review alone and confer, the owner verifies each finding and records a disposition, fixes land as new commits, and rounds repeat until every reviewer says consensus on the same tip." width="1299">
+</picture>
+
+The review round loop. [Details](docs/diagrams.md#3-the-review-round-loop).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/gate-dark.png">
+  <img src="docs/images/gate.png" alt="Decision tree for a push: the gate checks the push form, the remote and config, then each ref, and either refuses with a reason or allows it." width="1378">
+</picture>
+
+What the gate does with a push. [Details](docs/diagrams.md#7-what-the-gate-does-with-a-push).
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/lanes-dark.png">
+  <img src="docs/images/lanes.png" alt="Diagram of the coordinator splitting work by files into lanes A, B and C, each in its own workspace, then stacking them and running the full e2e once." width="1308">
+</picture>
+
+Parallel lanes and their ownership. [Details](docs/diagrams.md#4-parallel-lanes-and-their-ownership).
+
 ## Read
 
 - [docs/process.md](docs/process.md): the process, stage by stage, and why each rule exists.
