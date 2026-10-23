@@ -373,6 +373,24 @@ describe('rebase onto main', () => {
   });
 });
 
+describe('a rebase that changes the lane tip\'s diff', () => {
+  const box = sandbox({ config: { ...baseConfig, review: { provider: 'agent-review' } } });
+  after(() => box.cleanup());
+
+  test('moves the lane to the new commits, but not its checks', () => {
+    const { ws, tip } = builtRun(box);
+    box.sh(`jj edit ${tip}`, ws);
+    box.write('FEATURES.md', '- Dark mode, remembered per device\n', ws);
+    box.sh('jj new', ws);
+    const changed = box.sh('jj log --no-graph -r @- -T commit_id', ws).trim();
+    assert.match(box.cli(['rebase', '--run', 'dark', '--tip', changed], { cwd: ws }).out, /1 commit changed/);
+    assert.equal(box.run('dark').lanes.a.tip, changed);
+    const build = box.cli(['build', '--run', 'dark']);
+    assert.equal(build.code, 1);
+    assert.match(build.out, /lane a: unit has not run/);
+  });
+});
+
 describe('the user runs deploys, and prod is never an agent\'s', () => {
   const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user' } } });
   after(() => box.cleanup());
@@ -645,5 +663,24 @@ describe('abandoning a run', () => {
     assert.match(box.cli(['status', '--all']).out, /^dark .* abandoned$/m);
     box.cli(['scan', '--run', 'dark'], { cwd: ws });
     assert.match(box.gate('jj bookmark set ci/hole -r @- && jj git push -b ci/hole', ws).err, /was abandoned, but its commits fix a hole/);
+  });
+});
+
+describe('a live-hole run with a commit no lane made', () => {
+  const box = sandbox({ config: { ...baseConfig, push: { public: true } } });
+  after(() => box.cleanup());
+
+  test('a copy of the integration commit stays off the public remote too', () => {
+    const { ws } = builtRun(box, { intake: ['--live-hole'] });
+    const extra = box.commit('chore: integration note', { 'src/extra.mjs': 'export const extra = 1;\n' }, ws);
+    const integrated = box.cli(['integrate', '--run', 'dark', '--tip', extra]);
+    assert.equal(integrated.code, 0, integrated.all);
+    assert.equal(box.cli(['build', '--run', 'dark']).code, 0);
+    box.sh(`jj duplicate ${extra} -d main`);
+    const copy = box.sh(`jj log --no-graph -r 'children(main) & description(substring:"chore: integration note") ~ ${extra}' -T commit_id`).trim();
+    box.sh(`jj bookmark set ci/copy -r ${copy}`);
+    const scanned = box.cli(['scan', '--run', 'dark', '--tip', copy]);
+    assert.equal(scanned.code, 0, scanned.all);
+    assert.match(box.gate('jj git push -b ci/copy', box.repo).err, /Run dark fixes a hole that is live on the deployed server/);
   });
 });
