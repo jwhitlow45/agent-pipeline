@@ -195,3 +195,23 @@ test('the decision log file is plain markdown the user can read', () => {
   writeFileSync(file, '- 2026-10-22 (coordinator, LP12-AT-3): a press in the middle starts on the holder.\n');
   assert.deepEqual(missingDecisions(['LP12-AT-3'], config({ decisions: { ...DEFAULTS.decisions, file } })), []);
 });
+
+test('a decision is logged only by an entry that starts with its ID, never by a mention in the text', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'pipeline-decisions-')), 'log.md');
+  writeFileSync(file, [
+    '## 2026-10-22: RS-O-1, keeps RS-O-9 in mind (run dark)',
+    '- Chosen: per device, as in RS-O-2.',
+    '- Rejected: the AT-O-3 rule.',
+    '- FU20B-OP-5: a close from a panel skips the focus.',
+    '- FU20B-OP-11 adopted into the fixes, after LP16-PT-1.',
+    '- **AT-HIDDENPATH / AT-O-35, decided:** a player sees their own path.',
+    '- Item 2 (LP13-TR-6): the alerts column folds.',
+    '1. LP12-AT-7 = LP12-AT-8: one rule.',
+    'A plain line that names RS-O-4.',
+  ].join('\n'));
+  const cfg = config({ decisions: { ...DEFAULTS.decisions, file } });
+  const ids = ['RS-O-1', 'RS-O-9', 'FU20B-OP-5', 'FU20B-OP-11', 'AT-HIDDENPATH', 'AT-O-35', 'LP13-TR-6', 'LP12-AT-7', 'LP12-AT-8', 'RS-O-2', 'AT-O-3', 'LP16-PT-1', 'RS-O-4'];
+  assert.deepEqual(missingDecisions(ids, cfg), ['RS-O-2', 'AT-O-3', 'LP16-PT-1', 'RS-O-4']);
+  appendDecision({ id: 'RS-O-2', chose: 'a', why: 'b', rejected: 'c' }, cfg);
+  assert.deepEqual(missingDecisions(['RS-O-2'], cfg), []);
+});
