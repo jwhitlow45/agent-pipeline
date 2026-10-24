@@ -1504,8 +1504,8 @@ describe('a line of reads in any form (round 8)', () => {
     // other word may.
     ['repo', 'for d in a b; do git -C "$d" status; done', 0],
     ['repo', 'for w in a b; do jj -R "$w" log -r @; done', 0],
-    ['repo', 'for d in a b; do git -C $d status; done', 2, SEPARATOR],
-    ['repo', 'for r in a b; do git log -1 "$r"; done', 2, SEPARATOR],
+    ['repo', 'for d in a b; do git -C $d status; done', 2, DYNAMIC],
+    ['repo', 'for r in a b; do git log -1 "$r"; done', 2, DYNAMIC],
     ['repo', 'for b in a; do git push origin "$b"; done', 2, SEPARATOR],
     // A pipe into any program but a tool or a shell, which would read input the gate cannot see.
     ['repo', 'jj diff | less', 0],
@@ -1513,9 +1513,41 @@ describe('a line of reads in any form (round 8)', () => {
     ['repo', 'git diff | git apply', 2, PIPE],
     ['repo', 'git log | xargs git push', 2, PIPE],
     // Input redirected into a group reaches every command in it.
-    ['repo', '{ git apply; } < fix.patch', 2, SEPARATOR],
+    ['repo', '{ git apply; } < fix.patch', 2, /reads its input from a redirection/],
     // A cd anywhere.
     ['repo', 'cd .. && cd demo && jj st', 0],
     ['repo', 'cd .. && cd demo && jj git push -b ci/fresh', 2, /a cd may only come first/],
+  ]);
+});
+
+// Round 8, review round 1. A command is fed only by a pipe stage that reaches it: its own stage, or a
+// loop, group or subshell around it at any depth. A bookmark set with no push passes in any form. A
+// line of reads the gate refuses for a reason of its own says that reason, unless a command on it
+// cannot be classed or is an action.
+describe('what a pipe feeds, bookmark sets and the reasons read lines get (round 9)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  runRows(box, { repo: box.repo }, [
+    // R8-A1: a construct that is the first stage, or apart from the pipe, is not fed.
+    ['repo', '(git status) | head -20', 0],
+    ['repo', '{ git status; git log -3; } | less', 0],
+    ['repo', 'for d in a b; do git -C "$d" status; done | less', 0],
+    ['repo', 'for d in a b; do git -C "$d" status; done; printf x | cat', 0],
+    // A construct after a pipe feeds every command in it, at any depth.
+    ['repo', 'printf x | (git apply)', 2, SEPARATOR],
+    ['repo', 'git diff | (git apply)', 2, SEPARATOR],
+    ['repo', 'git diff | { cat; git apply; }', 2, SEPARATOR],
+    ['repo', 'git diff | if true; then git apply; fi', 2, SEPARATOR],
+    ['repo', 'git log | (python3)', 2, SEPARATOR],
+    ['repo', 'git diff | { { cat; git apply; }; }', 2, SEPARATOR],
+    ['repo', 'git diff | { cat; (git apply); }', 2, SEPARATOR],
+    // R9-OPUS-3: a bookmark set needs the plain form only before a push.
+    ['repo', 'jj bookmark set x -r @-; jj log', 0],
+    ['repo', 'jj bookmark set x -r @-; jj git push', 2, SEPARATOR],
+    ['repo', 'jj bookmark set x -r @- | cat && jj git push -b x', 2, /is piped/],
+    // R9-OPUS-4: the reason, when every command is classed and none is an action.
+    ['repo', 'for f in a b; do git log -1 -- "$f"; done', 2, DYNAMIC],
+    ['repo', 'jj st -R "$d"; git push', 2, SEPARATOR],
+    ['repo', 'git log "$r"; git push', 2, SEPARATOR],
   ]);
 });
