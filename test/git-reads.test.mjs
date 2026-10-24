@@ -418,11 +418,40 @@ describe('the CLI in a clone without the pipeline that git cannot read in full',
     assert.equal(result.code, 0, result.err);
   });
 
+  // Every source a config can come from says the pipeline is expected, so the refusals stay.
+  const SHALLOW = /This is a shallow clone/;
+  const TRACKING = /git fetches only some branches of origin here/;
+  const refuses = (cwd, pattern, { args = [], extra = {} } = {}) => {
+    const result = box.cli(['status', '--run', 'r1', ...args], { cwd, extra });
+    assert.notEqual(result.code, 0, result.all);
+    assert.match(result.all, pattern);
+  };
+
   test('a clone that holds the pipeline\'s config file still refuses', () => {
     const tree = at('with-config');
     box.sh(`git clone -q --single-branch --branch main https://github.com/example-owner/demo.git ${JSON.stringify(tree)}`, box.root);
-    const result = box.cli(['status', '--run', 'r1'], { cwd: tree });
-    assert.notEqual(result.code, 0, result.all);
-    assert.match(result.all, /git fetches only some branches of origin here/);
+    refuses(tree, TRACKING);
+  });
+
+  test('a clone whose trunk has the config committed still refuses, with the file gone from its tree', () => {
+    const shallow = at('committed-shallow');
+    const single = at('committed-single');
+    box.sh(`git clone -q --depth=1 file://${box.bare} ${JSON.stringify(shallow)} && rm ${JSON.stringify(join(shallow, 'pipeline.config.json'))}`, box.root);
+    box.sh(`git clone -q --single-branch --branch main https://github.com/example-owner/demo.git ${JSON.stringify(single)} && rm ${JSON.stringify(join(single, 'pipeline.config.json'))}`, box.root);
+    refuses(shallow, SHALLOW);
+    refuses(single, TRACKING);
+  });
+
+  test('a config named by --config or PIPELINE_CONFIG still refuses', () => {
+    const file = at('named-config.json');
+    writeFileSync(file, readFileSync(join(box.repo, 'pipeline.config.json')));
+    refuses(clones.shallow, SHALLOW, { args: ['--config', file] });
+    refuses(clones.single, TRACKING, { extra: { PIPELINE_CONFIG: file } });
+  });
+
+  test('a clone the registry holds still refuses', () => {
+    const tree = at('registered-shallow');
+    box.sh(`git clone -q --depth=1 file://${at('other.git')} ${JSON.stringify(tree)} && git -C ${JSON.stringify(tree)} remote set-url origin https://github.com/example-owner/demo.git`, box.root);
+    refuses(tree, SHALLOW);
   });
 });
