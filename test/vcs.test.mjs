@@ -9,7 +9,7 @@ import { buildHistory } from './fixtures/history.mjs';
 import { sandbox } from './helpers.mjs';
 import { sameChange } from '../lib/change.mjs';
 import { range, resolveOne, RevisionError, vcsAt } from '../lib/vcs.mjs';
-import { gitPatchIds, where } from '../lib/vcs-git.mjs';
+import { gitIdStatesIn, where } from '../lib/vcs-git.mjs';
 
 const ROOT = '0'.repeat(40);
 
@@ -80,7 +80,9 @@ describe('one history read by jj colocated, jj not colocated and plain git', () 
   const shape = (commit) => ({ id: commit.id, signature: commit.signature, empty: commit.empty, parents: commit.parents, description: commit.description, files: [...commit.files].sort((a, b) => a.path.localeCompare(b.path)) });
   const byId = (list) => [...list].sort((a, b) => a.id.localeCompare(b.id));
   const records = Object.fromEntries(Object.entries(backends).map(([name, vcs]) => [name, vcs.listCommits(range(tips))]));
-  const gitIds = (name) => gitPatchIds(where(backends[name].dir, backends[name].gitDir()), records[name].map((commit) => commit.id), { octopus: 'skip' });
+  // The normalized git ids, read the way the jj backend reads them: an empty diff or an octopus
+  // merge has none.
+  const gitIds = (name) => new Map([...gitIdStatesIn(where(backends[name].dir, backends[name].gitDir()), records[name].map((commit) => commit.id))].filter(([, state]) => !['empty', 'unsupported'].includes(state)));
 
   test('the backends are the ones the folders call for', () => {
     assert.deepEqual(Object.values(backends).map((vcs) => vcs.backend), ['jj', 'jj', 'git']);
