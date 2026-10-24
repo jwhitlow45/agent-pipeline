@@ -217,6 +217,9 @@ describe('pushes, wrappers and the same command line (deploy.runBy agent)', () =
     ['repo', 'git config --global url.x.insteadOf https://github.com/', 2, /The user edits git's config by hand/],
     ['repo', 'git config user.name Someone', 0],
     ['repo', 'git update-ref refs/remotes/origin/main %tip%', 2, /remote-tracking or replace ref/],
+    // The user's marker is refused in jj too when a line sets it.
+    ['repo', 'PIPELINE_USER_PUSH=1 jj git push -b ci/x', 2, /sets PIPELINE_USER_PUSH/],
+    ['repo', 'grep -rn PIPELINE_USER_PUSH .', 0],
     // The names git push reads in plain git are not jj's: jj never reads a root ref or a ref named HEAD.
     ['repo', 'git symbolic-ref HEAD refs/heads/main', 0],
     ['repo', 'git update-ref ORIG_HEAD HEAD', 0],
@@ -1709,11 +1712,17 @@ describe('plain git: pushes and the names git push reads', () => {
     // A worktree's .git file and the folders git keeps for worktrees.
     ['repo', 'Write', 2, /inside a \.git or \.jj folder/, { tool_name: 'Write', tool_input: { file_path: '%ws%/.git', content: 'gitdir: /elsewhere\n' } }],
     ['ws', 'echo x > %repo%/.git/worktrees/demo-dark/HEAD', 2, /inside a \.git or \.jj folder/],
-    // The user's marker, in any form.
-    ['repo', 'PIPELINE_USER_PUSH=1 git push origin %tip%:refs/heads/main', 2, /names PIPELINE_USER_PUSH/],
-    ['repo', 'export PIPELINE_USER_PUSH=1', 2, /names PIPELINE_USER_PUSH/],
-    ['repo', "cat > ../env.sh <<'Z'\nexport PIPELINE_USER_PUSH=1\nZ", 2, /names PIPELINE_USER_PUSH/],
-    ['repo', 'echo $PIPELINE_USER_PUSH', 2, /names PIPELINE_USER_PUSH/],
+    // The user's marker: a line that sets it is refused, and one that only reads it passes.
+    ['repo', 'PIPELINE_USER_PUSH=1 git push origin %tip%:refs/heads/main', 2, /sets PIPELINE_USER_PUSH/],
+    ['repo', 'env PIPELINE_USER_PUSH=1 git push origin %tip%:refs/heads/ci/dark', 2, /sets PIPELINE_USER_PUSH/],
+    ['repo', 'export PIPELINE_USER_PUSH=1', 2, /sets PIPELINE_USER_PUSH/],
+    ['repo', 'export PIPELINE_USER_PUSH', 2, /sets PIPELINE_USER_PUSH/],
+    ['repo', 'declare -x PIPELINE_USER_PUSH', 2, /sets PIPELINE_USER_PUSH/],
+    ['repo', "cat > ../env.sh <<'Z'\nexport PIPELINE_USER_PUSH=1\nZ", 2, /sets PIPELINE_USER_PUSH/],
+    ['repo', 'echo $PIPELINE_USER_PUSH', 0],
+    ['repo', 'grep -rn PIPELINE_USER_PUSH .', 0],
+    ['repo', 'git log -S PIPELINE_USER_PUSH', 0],
+    ['repo', 'export FOO=1 && echo $PIPELINE_USER_PUSH', 0],
     // Closing or waiving a live hole is the user's.
     ['repo', 'pipeline live-hole close --run dark --by owner --reason "fixed by hand"', 2, /the user's decision/],
     ['repo', 'pipeline live-hole waive --run dark --by owner --reason "the clone is gone"', 2, /the user's decision/],
