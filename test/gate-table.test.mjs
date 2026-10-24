@@ -1597,8 +1597,6 @@ describe('a pipe that ends a line (round 10)', () => {
   ]);
 });
 
-// Plain git (design 5.5 and 7): every push is read the way git push reads it, by full names and
-// full ids, from the main worktree and a lane worktree alike.
 // Every clone of a repository is the repository's: a deploy from one is read in that clone, and a
 // command from outside every clone reads the policy in a clone that still holds it.
 describe('jj: clones of one repository', () => {
@@ -1640,6 +1638,8 @@ describe('jj: clones of one repository', () => {
   ]);
 });
 
+// Plain git (design 5.5 and 7): every push is read the way git push reads it, by full names and
+// full ids, from the main worktree and a lane worktree alike.
 describe('plain git: pushes and the names git push reads', () => {
   const box = sandbox({ config: baseConfig, backend: 'git' });
   after(() => box.cleanup());
