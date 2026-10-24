@@ -49,7 +49,7 @@ Both hooks act only in repositories whose remote trunk has a committed `pipeline
 - **The plain form.** A gated line passes only as simple commands joined by `&&`, with every word written out. A `cd <folder>` may come first, on its own. A pipe may lead only into `head`, `tail`, `grep`, `wc`, `sort`, `cut`, `tr`, `cat`, `tee <file>`, `jq`, `column`, `uniq` or `nl`. Every read and every sink runs only with options from its exact list, spelled out in full: the list leaves out the options that write a file or run a program (`sort -o`, `git diff --output`, `git grep -O`, `jj diff --tool`), and git and getopt programs take a unique prefix of an option, so a prefix is refused too. The wrappers it reads are `timeout <duration>` and `caffeinate` with only `-d`, `-i`, `-m`, `-s` and `-u`.
 - **One action, placed last.** A push, a deploy, a merge, a dispatch, an API write or a review start comes last on its line. Before it only reads, the leading `cd` and `jj bookmark set|create|move NAME -r <commit id>` may run. A bookmark set stands alone between `&&`, never in a pipe, so its failure stops the push, and its revision is read in the workspace it runs in. Run anything else on its own first.
 - **Exact commands.** jj, git and gh are read with their own grammar, flag by flag: an unknown option, an alias, `-c`, `--config`, a shell, an interpreter, any other wrapper, `;`, `||`, a subshell or a word built at run time is refused there, and the refusal names the plain form to run.
-- **On every line.** A command whose name is built at run time (`$CMD`, `eval "$X"`, `sh -c "$X"`) is refused, and so is any write into a `.git` or `.jj` folder, git's, jj's, gh's, ssh's, curl's or wget's config, a shell startup file, Claude Code's shell snapshots, the hook files, Claude Code's or Codex's settings, or the pipeline's ledger, by a redirection, `tee`, `cp`, `mv`, `ln`, a tool's own output option or another program, or by Edit and Write. A reader may name those files only with options from its list.
+- **On every line.** A command whose name is built at run time (`$CMD`, `eval "$X"`, `sh -c "$X"`) is refused, and so is a write the line names into a `.git` or `.jj` folder, git's, jj's, gh's, ssh's, curl's or wget's config, a shell startup file, Claude Code's shell snapshots, the hook files, Claude Code's or Codex's settings, or the pipeline's ledger, by a redirection, `tee`, `cp`, `mv`, `ln`, a tool's own output option or another program, or by Edit and Write. A reader may name those files only with options from its list.
 
 The gate does not read PowerShell: a PowerShell command that names jj, git, gh, agent-review or a deploy is refused, with the advice to run it through Bash. So is one that names a registered deploy script under any name, and, while deploy scripts are registered, one that runs a command PowerShell builds (`& $script`, `Invoke-Expression`, `Start-Process`).
 
@@ -73,7 +73,7 @@ The gate blocks with exit code 2 and its reason on stderr. Any failure while it 
 - **Instructions:** copy [codex/AGENTS-section.md](../codex/AGENTS-section.md) into `~/.codex/AGENTS.md` or the project's `AGENTS.md`.
 - **Skill:** `install.sh --codex` links `skills/agent-pipeline` into `~/.codex/skills/`.
 - **Hooks:** Codex reads Claude-style hooks from `~/.codex/hooks.json` or a project's `.codex/hooks.json`. [codex/hooks.json](../codex/hooks.json) is the template, with `PIPELINE_BIN` standing for the CLI's path (`install.sh --codex` fills it in, shell-quoted). Codex asks you to trust a new hook the first time it runs. Codex names its shell tool `Bash` in hook input, and the matcher also names the older shell tool names. Codex's managed hooks do not block a call when the hook itself fails or times out, so the gate's own 60-second deadline is what keeps a slow check from letting a command through. A crash of the hook process still lets it run there.
-- **A persistent shell:** a Codex shell session keeps variables, functions and aliases between calls. The gate reads each call on its own and never sees them, so a function defined in one call can run a push in the next. See [what the gate is not](#what-the-gate-is-not).
+- **A persistent shell:** a Codex shell session keeps variables, functions and aliases between calls. The gate reads each call on its own and never sees them, so a function defined in one call can run a push in the next. See [what the gate does not reach](#what-it-does-not-reach).
 - **Without hooks:** run every push, deploy and review command through the gate: `pipeline exec -- jj git push --bookmark ci/x`. `exec` runs the gate, then the command, then the mirror.
 
 ## 4. Any other agent, or a person
@@ -93,7 +93,7 @@ Then fill in `pipeline.config.json` ([config.md](config.md)), commit it, and get
 
 Declare every deploy workflow. `deploy.deployWorkflows` is a regex over a workflow's file path and display name, and defaults to `deploy`. A workflow that deploys under another name (`cd.yml`, `release.yml`) is a deploy to the gate only when its file names an `environment:`, so give it a matching name or an environment. A workflow whose path, name, environment or inputs match `deploy.prodPattern` is a production deploy, which agents never run. The gate reads the workflow file GitHub will run: as committed on the `--ref` branch (or the default branch without one), or at a rerun's own commit, and as committed on trunk, with every local workflow it calls (`uses: ./.github/workflows/x.yml`). It reads `environment:` as a name or as a mapping with `name:`, keys in any order. It refuses an environment it cannot read: one named by an expression (`${{ inputs.target }}`), an anchor or alias, or another YAML form, and a call to a workflow in another repository. Name each environment plainly, so the gate can tell where a workflow deploys. Under `deploy.runBy: "user"`, agents may dispatch or rerun only the workflows listed in `deploy.allowedWorkflows`, by file path, and the list is empty by default.
 
-Set the statuses from a GitHub App whose private key and installation tokens agents never hold. GitHub can require a check only from an App (its expected source), not from a user or bot account (see [What GitHub must enforce](#7-what-github-must-enforce)), so a status an agent sets with its own token counts for nothing.
+Set the statuses from a GitHub App whose private key and installation tokens agents never hold. GitHub can require a check only from an App (its expected source), not from a user or bot account (see [What GitHub must enforce](#8-what-github-must-enforce)), so a status an agent sets with its own token counts for nothing.
 
 The [raccoon-vtt profile](../profiles/raccoon-vtt/) is a worked example from a real project.
 
@@ -113,59 +113,63 @@ For a design review, `pipeline review start --run R --topic T --no-commits --dir
 
 Reviews recorded on one machine reach another through GitHub: set `review.trustGithubStatus` to `true`, and a success status from `agent-review` or `pipeline/review` on the tip counts as consensus for the range up to it. It is a range attestation from a trusted writer: only the newest status of each context counts, and only when one of `review.trustedStatusWriters` set it (by default the repository's owner). The gate refuses an agent's `gh api` write of these statuses.
 
-## 7. What GitHub must enforce
+## 7. What the gate is for
 
-The gate stops the forms an agent would plausibly write. Only GitHub can make "never" hold against a script, so set these on every repository with the pipeline:
+The gate is a guardrail for cooperative agents. An agent that means well can still run a gated command by mistake: a deploy, a push, a pull request leaving draft or a merge, before the review and checks it needs. The gate reads each command before it runs, refuses that one, and names the step to run first.
+
+It is not a security boundary. It does not try to stop an agent that is working to get around it, and it is not a sandbox: a script, a build tool or an interpreter can still run what it likes, and the gate sees none of it. What holds against that is enforced outside the agent's machine: branch protection, required status checks, deploy keys and environment protection rules. A repository that needs a hard boundary must set them. [Section 8](#8-what-github-must-enforce) lists the exact settings, and `pipeline doctor` checks most of them.
+
+### What it checks an action against
+
+A read the gate needs either answers, proves the thing absent, or refuses: a workflow file it cannot parse the way GitHub would, a protection rule it cannot read, a remote it cannot list, or a git clone jj does not know. It checks each action against the remote itself: one `git ls-remote` of the address a push really reaches, after `pushurl`, `insteadOf` and `pushInsteadOf`, and the config committed at the trunk commit the remote reports. jj's and git's record of the remote must agree with it, or the gate says to fetch first. It refuses to act while a jj alias redefines a function, keyword or id the gate's reads use.
+
+The gate's own reads (jj, git and gh, to read config and the remote) run in the hook's environment, not in the agent's shell. A variable, function or alias that the agent's shell gets from a startup file is invisible to them. The gate refuses writes to the startup files, Claude Code's shell snapshots, and the config files git, jj, gh, ssh, curl and wget read, wherever the environment points them (`JJ_CONFIG` as a list of files and folders, `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CURL_HOME`, `WGETRC`), so what it reads and what the agent's command runs start from the same files. It reads those locations from the environment rather than asking each tool, which would start jj and git on every command. A variable the agent sets in a persistent shell is outside that.
+
+### How it reads a line
+
+The gate reads a command line by three rules. A line it cannot parse at all is refused.
+
+- **Nested scripts are read exactly.** The gate reads text a shell runs as code when it can read it byte for byte: a single-quoted `-c` script, a double-quoted one with no `$`, backtick or `\`, a heredoc with a quoted delimiter or a body with none of those, `watch`'s command, `eval`'s words, and `trap` and `alias` strings written the same way. A shell's options come from a fixed table for each shell, so `bash -o pipefail` takes its value, and an option outside the table refuses. A heredoc counts only as the shell's one input. A script handed over another way is refused: text piped into a shell, a here-string, a second input, another file descriptor, or a script built at run time. find's `-exec`, `-execdir`, `-ok` and `-okdir` are read as runners, every action of them, and a `{}` inside the program or a script refuses. Command substitutions (`$( )`, backticks, `<( )`) are read as commands too. A shell whose grammar is not sh's (fish, csh) runs no script the gate reads.
+- **One resolver names each program.** A command word, at any depth, is looked up the way the shell looks it up: a builtin is the shell's own, a path is that file, and a bare word is the first executable file on PATH, with relative entries read from the command's folder. A function counts in the shell that defined it, except after `command` or `builtin`, which skip functions, and it is never trusted as a builtin read. The file's real path is its identity for every check, gating, the curl and wget checks and deploy scripts, so a link named `fetcher` to curl is curl. A runner's environment carries into what it runs (`env PATH=…`, `env -i`, assignments after `env --`, `command -p`), and `sudo` and `doas` use a search path the gate cannot read. The shell expands env's own words before env clears or sets anything, so there the gate fills in `$HOME`, `$PATH` and `$PWD` from what the shell holds, where each stays one word: `env -i HOME=$HOME PATH=/usr/bin:/bin ls` runs ls from `/bin`. After PATH is set to a value built at run time, a bare word refuses, and a full path still runs. A word that cannot be found refuses under a runner, in a nested script and on a gated line. As a bare word at the top of an ungated line it may be a function or alias from the user's shell (`source ~/.nvm/nvm.sh && nvm use 24`), and passes as it did. `npx`, `bunx`, `pnpx`, `uvx` and `xcrun` find their command by their own lookup, so the gate reads that command by its name only.
+- **Shell state is tracked.** `cd`, `pushd` and `popd`, also through `command` and `builtin`, set the folder later words resolve from, and assignments, `export` and the like set PATH and HOME. A subshell, a pipe stage and a background job do not change their parent. A change that may not have happened (after `||`, in a branch or a loop, in a function body, or by a cd to a folder that does not exist yet) leaves the folder or PATH unknown, and a relative program or write after an unknown folder refuses. Other ways to set PATH (`read`, `printf -v`, a loop variable, zsh's `path` array) leave it unknown. A chain of more than eight runners, or scripts nested more than four deep, refuses.
+
+curl and wget may not read options, URLs or a file name from anywhere the gate cannot see first (`curl -K` and `-J`, `wget --config`, `-e`, `-i` and `--content-disposition`), and wget's options count under any prefix it accepts. While deploy scripts are registered, a PowerShell line may not run a program through the call operator, dot-sourcing or a quoted path.
+
+Paths are compared as the disk stores them: links are followed, and on a volume that ignores case (the macOS default) `.GIT/config` is `.git/config` and `GIT` is git.
+
+### What it does not reach
+
+The gate reads only the line it is given, as text. These are outside it:
+
+- script files and files a shell sources, which can run anything and change the folder, PATH and the shell's functions
+- code an interpreter or another program reads and runs on its own
+- values the shell reads as code only at run time
+- shell features that change how later words are found, which the gate follows only in part
+- the shell around the line: the gate takes the PATH, HOME and CDPATH the hook runs with as the agent's shell's own, and does not see a login shell's startup files or what a persistent shell kept from an earlier call
+- a deploy that a workflow starts on its own trigger, such as a push, a comment or a label, which the gate never sees as a deploy
+
+The settings in section 8 are what holds there.
+
+## 8. What GitHub must enforce
+
+These settings are the boundary the gate relies on. Without them a repository has only the guardrail. Set these on every repository with the pipeline:
 
 - **A ruleset on trunk** (target `~DEFAULT_BRANCH`): require a pull request before merging, block force pushes, and restrict deletions. Require the status checks `pipeline/scan`, `pipeline/ci` and `pipeline/review` (or `agent-review`), with CI's own checks. Pin every required check to the GitHub App that sets it (the check's expected source), and keep that App's private key and installation tokens out of every agent's environment. A required check that names no App counts a status from anyone with write access.
 - **A ruleset on every branch** (target `~ALL`, nothing excluded): block force pushes and restrict deletions, with only the user on the bypass list. A ruleset that names some branches, or excludes any, leaves the others open.
 - **A tag ruleset** (target `~ALL`, nothing excluded): restrict creations, updates and deletions to the user.
 - **Releases:** tag rules do not stop a release. Anyone with write access can publish one against a tag that already exists, so publishing a release is its own permission boundary. Any workflow a release starts that deploys to production runs in the protected production environment below.
 - **The production environment:** every production deploy workflow runs in an environment whose name matches `deploy.prodPattern`, with the user as a required reviewer and "Prevent self-review" on.
+- **Deploy keys:** a deploy key on an agent's machine is read-only, and every key or credential that reaches production stays off that machine, so the production environment's rules decide each production deploy.
 - **Agent tokens:** write access at most, never admin, on no ruleset's bypass list, without the Administration, Environments or Secrets permissions, and a credential of their own, not the user's.
 - **This machine:** every repository with the pipeline runs its git pre-push hook (`install.sh --project <repo>` links it), the backstop for a `git push` the gate did not see.
 
-`pipeline doctor` reads these settings with `gh api` and the hooks on this machine, and changes nothing. Each line is ok, missing, or unverified: a setting the API cannot show, such as whose credential a token is or who can reach an App's key. It says nothing is missing only when every setting it can read is there, and it lists the unverified ones for the user to confirm.
+`pipeline doctor` reads these settings with `gh api` and the hooks on this machine, and changes nothing. Each line is ok, missing, or unverified: a setting the API cannot show, such as whose credential a token is or who can reach an App's key. It says nothing is missing only when every setting it can read is there, and it lists the unverified ones for the user to confirm. It does not read deploy keys, so the user checks those.
 
 Each stage is a commit status, so these checks can require them. Each status describes only its own commit: when a run's tip moves, its stages show as `pending` on the new tip until they pass there. Anyone with write access to commit statuses can set any status, which is why each required check names its App. The gate also refuses an agent's `gh api` status write for the `pipeline/*` and `agent-review` contexts, for the CI workflow's name and its jobs, and for any check trunk's rules require.
 
 Two filters stay separate. GitHub's expected source decides which statuses GitHub counts toward a merge. The pipeline's own `review.trustedStatusWriters` decides which statuses the pipeline itself counts when it reads a review result. Setting one does not set the other.
 
-## What the gate is not
-
-The gate refuses what an agent would plausibly write, and any line it cannot read. A read the gate needs either answers, proves the thing absent, or refuses: a workflow file it cannot parse the way GitHub would, a protection rule it cannot read, a remote it cannot list, or a git clone jj does not know. It checks each action against the remote itself: one `git ls-remote` of the address a push really reaches, after `pushurl`, `insteadOf` and `pushInsteadOf`, and the config committed at the trunk commit the remote reports. jj's and git's record of the remote must agree with it, or the gate says to fetch first. It refuses to act while a jj alias redefines a function, keyword or id the gate's reads use.
-
-It is not a sandbox. These still run unseen:
-
-- a script the agent wrote and ran, `make`, `npm run` or another build tool
-- a changed copy of the deploy script, which is a new script to the gate
-- a function, alias or variable a persistent Codex shell kept from an earlier call
-- a program earlier on PATH than git, jj or gh
-- a workflow that starts on a comment, a label or a push to a `ci/*` branch, which the gate never sees as a deploy
-
-The gate's own reads (jj, git and gh, to read config and the remote) run in the hook's environment, not in the agent's shell. A variable, function or alias that the agent's shell gets from a startup file is invisible to them. The gate refuses writes to the startup files, Claude Code's shell snapshots, and the config files git, jj, gh, ssh, curl and wget read, wherever the environment points them (`JJ_CONFIG` as a list of files and folders, `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CURL_HOME`, `WGETRC`), so what it reads and what the agent's command runs start from the same files. It reads those locations from the environment rather than asking each tool, which would start jj and git on every command. A variable the agent sets in a persistent shell is outside that.
-
-The gate reads a command by three rules, and refuses what they cannot settle.
-
-- **Nested scripts are exact or refused.** The gate reads text a shell runs as code only when it reads it byte for byte: a single-quoted `-c` script, a double-quoted one with no `$`, backtick or `\`, a heredoc with a quoted delimiter or a body with none of those, `watch`'s command, `eval`'s words, and `trap` and `alias` strings written the same way. A shell's options come from a fixed table for each shell, so `bash -o pipefail` takes its value, and an option outside the table refuses. A heredoc counts only as the shell's one input. Text piped into a shell, a here-string, a second input and a script built at run time are refused. find's `-exec`, `-execdir`, `-ok` and `-okdir` are read as runners, every action of them, and a `{}` inside the program or a script refuses. Command substitutions (`$( )`, backticks, `<( )`) are read as commands too. A shell whose grammar is not sh's (fish, csh) runs no script the gate reads.
-- **One resolver names every program.** Every command word, at any depth, is found the way the shell finds it: a builtin is the shell's own, a path is that file, and a bare word is the first executable file on PATH, with relative entries read from the command's folder. The file's real path is its identity for every check, gating, the curl and wget checks and deploy scripts, so a link named `fetcher` to curl is curl. A runner's environment carries into what it runs (`env PATH=…`, `env -i`, assignments after `env --`, `command -p`), and `sudo` and `doas` use a search path the gate cannot read. After PATH is set to a value built at run time, a bare word refuses, and a full path still runs. A word that cannot be found refuses under a runner, in a nested script and on a gated line. As a bare word at the top of an ungated line it may be a function or alias from the user's shell (`source ~/.nvm/nvm.sh && nvm use 24`), and passes as it did. `npx`, `bunx`, `pnpx`, `uvx` and `xcrun` find their command by their own lookup, so the gate reads that command by its name only.
-- **Shell state is tracked, and limits refuse.** `cd`, `pushd` and `popd`, also through `command` and `builtin`, set the folder later words resolve from, and assignments, `export` and the like set PATH and HOME. A subshell, a pipe stage and a background job do not change their parent. A change that may not have happened (after `||`, in a branch or a loop, in a function body, or by a cd to a folder that does not exist yet) leaves the folder or PATH unknown, and a relative program or write after an unknown folder refuses. Other ways to set PATH (`read`, `printf -v`, a loop variable, zsh's `path` array) leave it unknown. A chain of more than eight runners, or scripts nested more than four deep, refuses.
-
-What these rules do not reach:
-
-- a script in a file (`bash x.sh`, `source x.sh`), which can change PATH, the folder and the functions, and code an interpreter reads (`python3 -`, `node <<EOF`, `awk`, `perl -e`)
-- programs that run a command but are not in the gate's runner table, such as debuggers, `osascript`, `ssh` and `tmux`
-- a login shell's startup files, which may set PATH before the command runs
-- a variable's value read as code at run time, as bash does for arithmetic (`$((x))`) and array subscripts
-- the PATH, HOME and CDPATH the hook runs with, which the gate takes as the agent's shell's own
-
-curl and wget may not read options, URLs or a file name from anywhere the gate cannot see first (`curl -K` and `-J`, `wget --config`, `-e`, `-i` and `--content-disposition`), and wget's options count under any prefix it accepts. While deploy scripts are registered, a PowerShell line may not run a program through the call operator, dot-sourcing or a quoted path.
-
-Paths are compared as the disk stores them: links are followed, and on a volume that ignores case (the macOS default) `.GIT/config` is `.git/config` and `GIT` is git.
-
-The settings above are what holds then.
-
-## 8. Where state lives
+## 9. Where state lives
 
 - Runs: `~/.local/state/agent-pipeline/runs/<run>.json` (or `$AGENT_PIPELINE_STATE`).
 - Check logs: `~/.local/state/agent-pipeline/logs/<run>/<lane>/<tip>/`.
