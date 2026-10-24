@@ -373,3 +373,56 @@ describe('the CLI and a remote that tracks only some branches', () => {
     }
   });
 });
+
+// A clone with no pipeline (no registry entry, no config file in its tree) that git cannot read in
+// full, or a git below 2.41, says nothing about a pipeline: a command that may run outside the
+// pipeline's repository treats it as a repository without one.
+describe('the CLI in a clone without the pipeline that git cannot read in full', () => {
+  const box = sandbox({ backend: 'git' });
+  after(() => box.cleanup());
+  const at = (name) => join(box.root, name);
+  box.sh(`git init -q --bare ${JSON.stringify(at('other.git'))} && git -C ${JSON.stringify(at('other.git'))} config uploadpack.allowFilter true`, box.root);
+  box.sh(`git clone -q file://${at('other.git')} ${JSON.stringify(at('seed'))} && cd ${JSON.stringify(at('seed'))} && echo a > a.txt && git add a.txt && git commit -q -m a && echo b > b.txt && git add b.txt && git commit -q -m b && git push -q origin HEAD:refs/heads/main && git push -q origin HEAD:refs/heads/other`, box.root);
+  const clones = Object.fromEntries([['full', ''], ['single', '--single-branch --branch main'], ['shallow', '--depth=1'], ['partial', '--filter=blob:none']].map(([name, flags]) => {
+    box.sh(`git clone -q ${flags} file://${at('other.git')} ${JSON.stringify(at(name))}`, box.root);
+    return [name, at(name)];
+  }));
+  assert.equal(box.cli(['intake', '--run', 'r1', '--kind', 'fast', '--words', 'Add a dark mode toggle.']).code, 0);
+  const shim = at('shim');
+  mkdirSync(shim);
+  const real = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).stdout.trim();
+  writeFileSync(join(shim, 'git'), `#!/bin/sh\nif [ "$1" = version ]; then echo "git version 2.39.5"; exit 0; fi\nexec ${real} "$@"\n`);
+  chmodSync(join(shim, 'git'), 0o755);
+
+  for (const name of ['single', 'shallow', 'partial']) {
+    test(`a run's command from a ${name} clone falls back to the run's repository`, () => {
+      const result = box.cli(['status', '--run', 'r1'], { cwd: clones[name] });
+      assert.equal(result.code, 0, result.all);
+    });
+  }
+
+  // A jj repository's run, since below 2.41 a git repository with the pipeline is refused itself.
+  test('with git older than 2.41, a run\'s command from a clone without the pipeline falls back too', () => {
+    const jjBox = sandbox();
+    try {
+      assert.equal(jjBox.cli(['intake', '--run', 'r2', '--kind', 'fast', '--words', 'Add a dark mode toggle.']).code, 0);
+      const result = jjBox.cli(['status', '--run', 'r2'], { cwd: clones.full, extra: { PATH: `${shim}:${process.env.PATH}` } });
+      assert.equal(result.code, 0, result.all);
+    } finally {
+      jjBox.cleanup();
+    }
+  });
+
+  test('a review command there is not the gate\'s to check', () => {
+    const result = box.gate('agent-review start --topic t1', clones.single);
+    assert.equal(result.code, 0, result.err);
+  });
+
+  test('a clone that holds the pipeline\'s config file still refuses', () => {
+    const tree = at('with-config');
+    box.sh(`git clone -q --single-branch --branch main https://github.com/example-owner/demo.git ${JSON.stringify(tree)}`, box.root);
+    const result = box.cli(['status', '--run', 'r1'], { cwd: tree });
+    assert.notEqual(result.code, 0, result.all);
+    assert.match(result.all, /git fetches only some branches of origin here/);
+  });
+});
