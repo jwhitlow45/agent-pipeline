@@ -89,7 +89,7 @@ describe('one history read by jj colocated, jj not colocated and plain git', () 
     const want = byId(records.jj).map(shape);
     assert.equal(want.length, 21);
     for (const name of ['jj-plain', 'git']) assert.deepEqual(byId(records[name]).map(shape), want, name);
-    assert.ok(records.jj.every((commit) => /^[k-z]{8}$/.test(commit.changeId)));
+    assert.ok(records.jj.every((commit) => /^[k-z]{32}$/.test(commit.changeId)));
     assert.ok(records.git.every((commit) => commit.changeId === null));
   });
 

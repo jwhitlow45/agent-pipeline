@@ -10,7 +10,7 @@ import { cmdBuild, cmdCheck, cmdCommits, cmdIntegrate, cmdLane, cmdMutation, cmd
 import { cmdDoctor } from '../lib/doctor.mjs';
 import { cmdExec, cmdGate, cmdGitPrePush, cmdMirrorHook } from '../lib/hooks.mjs';
 import { cmdBrief, cmdDecide, cmdDecisions, cmdDesign, cmdIntake, cmdSignoff, cmdSpec } from '../lib/plan.mjs';
-import { cmdAbandon, cmdCi, cmdCleanup, cmdDeploy, cmdNotify, cmdPush, cmdRebase, cmdReview, cmdScan } from '../lib/ship.mjs';
+import { cmdAbandon, cmdCi, cmdCleanup, cmdDeploy, cmdLiveHole, cmdNotify, cmdPush, cmdRebase, cmdReview, cmdScan } from '../lib/ship.mjs';
 import { cmdConfig, cmdInit, cmdMirror, cmdStatus } from '../lib/status.mjs';
 import { stateDir, UsageError } from '../lib/util.mjs';
 
@@ -52,6 +52,7 @@ Ship
   notify    --run R --event deploy|waiting|done|failed|note --message TEXT
   cleanup   --run R
   abandon   --run R --reason TEXT --by WHO            Stop a run for good: frees its lanes, never deploys
+  live-hole close|waive --run R --by WHO --reason TEXT The user's: end a live hole's embargo, or waive commits no clone can read
 
 After
   live-play start|bug|import|resolve|status|done --run R [--prefix LPn] [--deployed REV] [--workspace DIR] [--db NAMES] [--brief F]
@@ -91,7 +92,7 @@ const COMMANDS = {
   scan: cmdScan, push: cmdPush, ci: cmdCi, rebase: cmdRebase, notify: cmdNotify, cleanup: cmdCleanup, abandon: cmdAbandon, docs: cmdDocs,
   status: cmdStatus, mirror: cmdMirror, gate: cmdGate, 'mirror-hook': cmdMirrorHook, 'git-pre-push': cmdGitPrePush, doctor: cmdDoctor,
 };
-const SUBCOMMANDS = { review: cmdReview, deploy: cmdDeploy, 'live-play': cmdLivePlay, followup: cmdFollowup };
+const SUBCOMMANDS = { review: cmdReview, deploy: cmdDeploy, 'live-play': cmdLivePlay, followup: cmdFollowup, 'live-hole': cmdLiveHole };
 
 try {
   const argv = process.argv.slice(2);
