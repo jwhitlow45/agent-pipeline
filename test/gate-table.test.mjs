@@ -1869,6 +1869,55 @@ describe('plain git: a bare repository with no registered worktree left', () => 
   ]);
 });
 
+// The capability check guards the pipeline's own reads, so it applies only once the repository is
+// known to have the pipeline: a clone git cannot read in full that has none pushes as before.
+describe('plain git: clones the reads need in full, with and without the pipeline', () => {
+  const box = sandbox({ config: baseConfig, backend: 'git' });
+  after(() => box.cleanup());
+  const at = (name) => join(box.root, name);
+  const OTHER = 'https://github.com/other-owner/other.git';
+  box.sh(`git init -q --bare ${JSON.stringify(at('other.git'))} && git -C ${JSON.stringify(at('other.git'))} config uploadpack.allowFilter true`, box.root);
+  box.sh(`git clone -q file://${at('other.git')} ${JSON.stringify(at('other-seed'))} && cd ${JSON.stringify(at('other-seed'))} && echo a > a.txt && git add a.txt && git commit -q -m a && echo b > b.txt && git add b.txt && git commit -q -m b && git push -q origin HEAD:refs/heads/main`, box.root);
+  box.sh(`git config --global url.${JSON.stringify(at('other.git'))}.insteadOf ${OTHER}`, box.root);
+  // Each clone reads its remote by its GitHub address, as a real clone would.
+  const clone = (name, flags, source = at('other.git'), url = OTHER) => {
+    box.sh(`git clone -q ${flags} file://${source} ${JSON.stringify(at(name))} && git -C ${JSON.stringify(at(name))} remote set-url origin ${url}`, box.root);
+    return at(name);
+  };
+  clone('other-full', '');
+  clone('other-shallow', '--depth=1');
+  clone('other-partial', '--filter=blob:none');
+  // A linked worktree whose common folder is not a .git: its local config folder comes from git's
+  // list of worktrees.
+  clone('other-separate', `--depth=1 --separate-git-dir ${JSON.stringify(at('other-separate.git'))}`);
+  box.sh(`git -C ${JSON.stringify(at('other-separate'))} worktree add -q ${JSON.stringify(at('other-linked'))} -b t`, box.root);
+  clone('pipeline-shallow', '--depth=1', box.bare, `https://github.com/${SLUG}.git`);
+  const values = Object.fromEntries(['other-full', 'other-shallow', 'other-partial', 'other-linked', 'pipeline-shallow'].map((name) => [name.replace(/-(\w)/g, (whole, c) => c.toUpperCase()), at(name)]));
+  runRows(box, values, [
+    ['otherShallow', 'git push origin HEAD:refs/heads/x', 0],
+    ['otherPartial', 'git push origin HEAD:refs/heads/x', 0],
+    ['otherLinked', 'git push origin HEAD:refs/heads/x', 0],
+    ['otherShallow', 'gh pr create --title x --body y', 0],
+    ['otherPartial', 'gh pr create --title x --body y', 0],
+    ['pipelineShallow', 'git push origin HEAD:refs/heads/ci/x', 2, /This is a shallow clone/],
+    ['pipelineShallow', 'gh pr create --title x --body y', 2, /This is a shallow clone/],
+  ]);
+
+  test('with git older than 2.41, a repository without the pipeline pushes and the pipeline\'s is refused', () => {
+    const shim = at('shim');
+    box.sh(`mkdir -p ${JSON.stringify(shim)}`, box.root);
+    const real = box.sh('command -v git', box.root).trim();
+    box.write('shim/git', `#!/bin/sh\nif [ "$1" = version ]; then echo "git version 2.39.5"; exit 0; fi\nexec ${real} "$@"\n`, box.root);
+    box.sh(`chmod +x ${JSON.stringify(join(shim, 'git'))}`, box.root);
+    const gate = (command, cwd) => box.cli(['gate'], { input: JSON.stringify({ tool_input: { command }, cwd }), extra: { PATH: `${shim}:${process.env.PATH}` } });
+    const unrelated = gate('git push origin HEAD:refs/heads/x', values.otherFull);
+    assert.equal(unrelated.code, 0, unrelated.err);
+    const own = gate('git push origin HEAD:refs/heads/ci/x', box.repo);
+    assert.equal(own.code, 2);
+    assert.match(own.err, /git 2\.39 is older than 2\.41/);
+  });
+});
+
 // A run recorded in jj goes on from a plain git clone of the same remote: the commits keep their
 // ids, so the scans recorded in jj cover them there.
 describe('a run recorded in jj and continued from a plain git clone', () => {
