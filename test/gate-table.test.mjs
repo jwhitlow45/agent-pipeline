@@ -1417,7 +1417,7 @@ describe('nested scripts, one resolver and shell state (round 6)', () => {
     ['repo', "printf '\\143url -K cfg' | sh", 2, /reads its script from a pipe/],
     ['repo', "echo -n -n 'curl -K cfg' | sh", 2, /reads its script from a pipe/],
     ['repo', "cat <<'EOF' | sh\ncurl -K cfg\nEOF", 2, /reads its script from a pipe/],
-    ['repo', "find . -maxdepth 0 -exec sh -c 'curl -K cfg' \;", 2, /\(-K\)/],
+    ['repo', String.raw`find . -maxdepth 0 -exec sh -c 'curl -K cfg' \;`, 2, /\(-K\)/],
     ['repo', "watch -n 5 'ls -la'", 0],
     // Rule 2: every command word is found as the shell finds it, and its real file is what counts.
     { name: 'a link named fetcher to curl on PATH', setup: (b) => { b.env.PATH = `${join(b.root, 'links')}:${base}`; } },
@@ -1436,5 +1436,49 @@ describe('nested scripts, one resolver and shell state (round 6)', () => {
     ['plain', 'command cd %real% && ./rollout b1 main', 2, /runs before|The user runs deploys/],
     ['plain', 'builtin cd %real% && ./rollout b1 main', 2, /runs before|The user runs deploys/],
     ['repo', `${nine}curl -K cfg`, 2, /more than 8 runners/],
+  ]);
+});
+
+// Round 7: a row for each refusal no row reached, with an allow control beside it, and the two
+// ordinary forms the gate refused (PA-83, R7-1).
+describe('the checks that had no row, and functions and env words (round 7)', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user' } } });
+  after(() => box.cleanup());
+  // links holds fetcher, a link to curl. links2 holds fetcher too, as a link to find.
+  box.sh('mkdir -p ../links ../links2 && ln -s /usr/bin/curl ../links/fetcher && ln -s /usr/bin/find ../links2/fetcher');
+  const base = box.env.PATH;
+  const values = { repo: box.repo, links: join(box.root, 'links'), links2: join(box.root, 'links2') };
+  runRows(box, values, [
+    // hash -p, -d or name=path changes what a later word runs.
+    ['repo', 'hash -p /usr/bin/true ls && ls', 2, /changes where the shell finds a name/],
+    ['repo', 'hash -r && ls', 0],
+    // A prompt the shell expands runs code: PS4 on every traced command.
+    ['repo', "PS4='$(curl -K cfg) ' bash -x -c 'ls'", 2, /sets PS4, which the shell reads as code/],
+    ['repo', "PS4='+ ' bash -x -c 'ls'", 0],
+    // A variable the shell loads code from.
+    ['repo', "BASH_ENV=./setup.sh bash -c 'ls'", 2, /sets BASH_ENV, which the shell reads as code/],
+    ['repo', "LC_ALL=C bash -c 'ls'", 0],
+    // A shell that reads its script from another file descriptor.
+    ['repo', 'bash <&3', 2, /reads its script from another file descriptor/],
+    ['repo', "bash -c 'ls' <&3", 0],
+    // A relative write after a cd the gate cannot follow.
+    ['repo', 'cd "$DIR" && echo done > out.txt', 2, /writes out.txt after a cd the gate cannot follow/],
+    ['repo', 'cd "$DIR" && echo done > /tmp/out.txt', 0],
+    // enable -f loads a builtin from a file.
+    ['repo', 'enable -f ./ext.so ext', 2, /loads a builtin from a file/],
+    ['repo', 'enable -a', 0],
+    // A name whose file depends on the PATH the line may set.
+    { name: 'fetcher on PATH as a link to curl', setup: (b) => { b.env.PATH = `${join(b.root, 'links')}:${base}`; } },
+    ['repo', 'test -f x && export PATH=%links2%:/usr/bin:/bin; fetcher https://example.com', 2, /may run curl or find as fetcher, depending on the PATH the line sets/],
+    ['repo', 'test -f x && export PATH=%links%:/usr/bin:/bin; fetcher https://example.com', 0],
+    { name: 'the usual PATH', setup: (b) => { b.env.PATH = base; } },
+    // PA-83: a function is found in the shell that defines it, by the lookup that reaches functions.
+    ['repo', "bash -c 'f() { echo hi; }; f'", 0],
+    ['repo', "bash -c 'f() { echo hi; }; command f'", 2, /the gate cannot find f/],
+    ['repo', "f() { echo hi; }; bash -c 'f'", 2, /the gate cannot find f/],
+    // R7-1: env's own words are expanded from the shell's state before env clears or sets anything.
+    ['repo', 'env -i HOME=$HOME PATH=/usr/bin:/bin ls', 0],
+    ['repo', 'env -i HOME=$NOPE PATH=/usr/bin:/bin ls', 2, DYNAMIC],
+    ['repo', 'IFS=/; env -i HOME=$HOME PATH=/usr/bin:/bin ls', 2, DYNAMIC],
   ]);
 });
