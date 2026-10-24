@@ -1541,6 +1541,9 @@ describe('what a pipe feeds, bookmark sets and the reasons read lines get (round
     ['repo', 'git log | (python3)', 2, SEPARATOR],
     ['repo', 'git diff | { { cat; git apply; }; }', 2, SEPARATOR],
     ['repo', 'git diff | { cat; (git apply); }', 2, SEPARATOR],
+    // A subshell that starts a later stage after another word.
+    ['repo', 'git diff | ! (git apply)', 2, SEPARATOR],
+    ['repo', 'git diff | time (git apply)', 2, SEPARATOR],
     // R9-OPUS-3: a bookmark set needs the plain form only before a push.
     ['repo', 'jj bookmark set x -r @-; jj log', 0],
     ['repo', 'jj bookmark set x -r @-; jj git push', 2, SEPARATOR],
@@ -1549,5 +1552,32 @@ describe('what a pipe feeds, bookmark sets and the reasons read lines get (round
     ['repo', 'for f in a b; do git log -1 -- "$f"; done', 2, DYNAMIC],
     ['repo', 'jj st -R "$d"; git push', 2, SEPARATOR],
     ['repo', 'git log "$r"; git push', 2, SEPARATOR],
+  ]);
+});
+
+// R8-A2: a pipe at the end of a line leads into the next command, past blank and comment lines, so
+// the multiline forms are fed as the one-line forms are. A pipeline that ends before the newline
+// feeds nothing after it, and only a pipe carries across a newline.
+describe('a pipe that ends a line (round 10)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  runRows(box, { repo: box.repo }, [
+    ['repo', 'git diff |\n(git apply)', 2, SEPARATOR],
+    ['repo', 'git diff |\n{ cat; git apply; }', 2, SEPARATOR],
+    ['repo', 'git diff |\nif true; then git apply; fi', 2, SEPARATOR],
+    ['repo', 'git log |\n(python3)', 2, SEPARATOR],
+    ['repo', 'git diff |\ngit apply', 2, PIPE],
+    ['repo', 'git diff |\n\n(git apply)', 2, SEPARATOR],
+    ['repo', 'git diff |\n# c\n(git apply)', 2, SEPARATOR],
+    ['repo', 'git diff |\n\n# c\n\n(git apply)', 2, SEPARATOR],
+    ['repo', 'git status |\nhead -3', 0],
+    ['repo', 'git log |\nless', 0],
+    ['repo', 'git diff | cat\n(git status)', 0],
+    ['repo', 'git diff | cat\n# c\n(git status)', 0],
+    // A heredoc's body is read first, and the pipe goes on after it.
+    ['repo', "cat <<'EOF' |\ngit push origin main\nEOF\nhead -1", 0],
+    ['repo', "cat <<'EOF' |\nhello\nEOF\ngit apply", 2, PIPE],
+    // && does not carry across a newline in this reading, so the line keeps its message.
+    ['repo', 'git status &&\ngit push origin main', 2, /joined to other commands by a second line/],
   ]);
 });
