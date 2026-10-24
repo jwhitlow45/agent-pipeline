@@ -1126,3 +1126,30 @@ describe('pipeline doctor', () => {
   });
 });
 
+
+// The deploy command deploy check prints runs as printed, from outside every worktree too, where git
+// takes only a full commit id. jj's command keeps the short id it always printed.
+forEachBackend('the printed deploy command', (backend) => {
+  const git = backend === 'git';
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, match: 'release\\.sh' } }, backend });
+  after(() => box.cleanup());
+
+  test('passes the gate as printed, run from outside every worktree', () => {
+    box.write('scripts/release.sh', '#!/bin/sh\necho deploying "$@"\n', box.root);
+    box.sh(`chmod +x ${JSON.stringify(join(box.root, 'scripts', 'release.sh'))}`);
+    box.write('pipeline.local.json', JSON.stringify({ deploy: { command: `${join(box.root, 'scripts', 'release.sh')} {name} {tip}` } }));
+    box.cli(['config', '--check']);
+    const { ws, tip } = builtRun(box);
+    assert.equal(box.cli(['scan', '--run', 'dark'], { cwd: ws }).code, 0);
+    box.sh(git ? `git push -q origin ${tip}:refs/heads/ci/dark` : 'jj bookmark set ci/dark -r @- && jj git push --bookmark ci/dark', ws);
+    box.ghScript(ciScript(tip));
+    assert.equal(box.cli(['ci', '--run', 'dark']).code, 0);
+    assert.equal(box.cli(['review', 'skip', '--run', 'dark', '--reason', 'the user said to skip review for this test']).code, 0);
+    const check = box.cli(['deploy', 'check', '--run', 'dark']);
+    assert.equal(check.code, 0, check.all);
+    const printed = /^ {2}Run: (.+)$/m.exec(check.out)[1];
+    assert.equal(printed, `${join(box.root, 'scripts', 'release.sh')} dark ${git ? tip : tip.slice(0, 12)}`);
+    const gated = box.gate(printed, box.root);
+    assert.equal(gated.code, 0, gated.err);
+  });
+});
