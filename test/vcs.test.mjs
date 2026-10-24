@@ -197,3 +197,34 @@ describe('conflict marker labels in the normalized git id', () => {
     });
   }
 });
+
+// Each read splits commits by a marker made for that read alone, so a file whose text looks like a
+// marker is only text.
+describe('git reads split commits only at their own marker', () => {
+  const box = sandbox({ backend: 'git' });
+  after(() => box.cleanup());
+  Object.assign(process.env, box.env);
+  before(() => Object.assign(process.env, box.env));
+  const main = box.head();
+  const other = box.commit('feat: other', { 'o.txt': 'other\n' });
+  const shaped = box.commit('docs: a line shaped like a marker', { 'm.txt': `pipeline-commit-00000000-0000-4000-8000-000000000000 ${other}\nafter the marker\n`, [`pipeline-commit-00000000-0000-4000-8000-000000000000 ${other}`]: 'a path\n' });
+  const vcs = vcsAt(box.repo);
+  const tips = range(shaped, main);
+
+  test('the diff after a marker-shaped line is the commit\'s, and the other commit keeps its own', () => {
+    const patches = vcs.commitPatches(tips);
+    assert.match(patches.get(shaped), /^\+after the marker$/m);
+    assert.match(patches.get(other), /^\+other$/m);
+    assert.doesNotMatch(patches.get(other), /after the marker/);
+  });
+
+  test('both commits keep their files and their ids', () => {
+    const records = vcs.listCommits(tips);
+    const byId = new Map(records.map((commit) => [commit.id, commit]));
+    assert.deepEqual(byId.get(other).files.map((file) => file.path), ['o.txt']);
+    assert.deepEqual(byId.get(shaped).files.map((file) => file.path).sort(), ['m.txt', `pipeline-commit-00000000-0000-4000-8000-000000000000 ${other}`].sort());
+    assert.ok(byId.get(other).patchId);
+    assert.ok(byId.get(shaped).patchId);
+    assert.notEqual(byId.get(other).patchId, byId.get(shaped).patchId);
+  });
+});
