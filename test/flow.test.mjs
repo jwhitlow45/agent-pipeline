@@ -990,6 +990,15 @@ describe('pipeline doctor', () => {
     assert.match(box.cli(['doctor']).out, /ok +\S+ runs the pipeline's pre-push hook/);
   });
 
+  test('checks the hook in every registered clone, not only the first', () => {
+    box.ghScript([...complete, environments(true), repoRule(false)]);
+    const second = join(box.root, 'second-clone');
+    assert.equal(box.cli(['config', '--check']).code, 0);
+    box.sh(`jj git clone --colocate https://github.com/${SLUG}.git ${JSON.stringify(second)} >/dev/null 2>&1`, box.root);
+    assert.equal(box.cli(['config', '--check'], { cwd: second }).code, 0);
+    assert.match(box.cli(['doctor']).out, /missing +\S+second-clone runs the pipeline's pre-push hook/);
+  });
+
   // A registered folder git no longer finds a repository in runs no hook.
   test('names a registered folder that is no longer a repository', () => {
     box.ghScript([...complete, environments(true), repoRule(false)]);

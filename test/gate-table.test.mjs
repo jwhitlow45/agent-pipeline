@@ -1592,6 +1592,39 @@ describe('a pipe that ends a line (round 10)', () => {
 
 // Plain git (design 5.5 and 7): every push is read the way git push reads it, by full names and
 // full ids, from the main worktree and a lane worktree alike.
+// Every clone of a repository is the repository's: a deploy from one is read in that clone, and a
+// command from outside every clone reads the policy in a clone that still holds it.
+describe('jj: clones of one repository', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, match: 'release\\.sh' } } });
+  after(() => box.cleanup());
+  box.write('scripts/release.sh', '#!/bin/sh\necho deploying "$@"\n', box.root);
+  box.sh(`chmod +x ${join(box.root, 'scripts', 'release.sh')}`);
+  const local = JSON.stringify({ deploy: { command: `${join(box.root, 'scripts', 'release.sh')} {name} {tip}` } });
+  // Two clones of their own, registered in order. The sandbox's repository runs no pipeline command.
+  const [first, second] = ['first', 'second'].map((name) => {
+    const dir = join(box.root, name);
+    box.sh(`jj git clone --colocate https://github.com/${SLUG}.git ${JSON.stringify(dir)} >/dev/null 2>&1`, box.root);
+    box.write('pipeline.local.json', local, dir);
+    assert.equal(box.cli(['config', '--check'], { cwd: dir }).code, 0);
+    return dir;
+  });
+  const tip = box.commit('feat: in the second clone', { 'b.txt': 'b\n' }, second);
+  const deploy = (rev) => `%root%/scripts/release.sh b1 ${rev}`;
+  const merge = 'gh pr merge 7 -R example-owner/demo --squash';
+  runRows(box, { root: box.root, first, second }, [
+    ['second', deploy('@-'), 2, new RegExp(`No pipeline run records ${tip.slice(0, 12)}`)],
+    { name: 'the second clone registers again', setup: (b, v) => b.cli(['status'], { cwd: v.second }) },
+    ['second', deploy('@-'), 2, new RegExp(`No pipeline run records ${tip.slice(0, 12)}`)],
+    ['root', deploy('@-'), 2, /names a working copy, and this runs outside the repository's workspaces/],
+    ['root', merge, 2, /could not read pull request 7/],
+    // The first clone moves away: the second still holds the repository.
+    { name: 'the first clone moves away', setup: (b, v) => b.sh(`mv ${JSON.stringify(v.first)} ${JSON.stringify(join(b.root, 'moved'))}`, b.root) },
+    ['root', merge, 2, /could not read pull request 7/],
+    { name: 'the second clone moves away too', setup: (b, v) => b.sh(`mv ${JSON.stringify(v.second)} ${JSON.stringify(join(b.root, 'moved-second'))}`, b.root) },
+    ['root', merge, 2, /no clone of it on this machine still holds it/],
+  ]);
+});
+
 describe('plain git: pushes and the names git push reads', () => {
   const box = sandbox({ config: baseConfig, backend: 'git' });
   after(() => box.cleanup());
