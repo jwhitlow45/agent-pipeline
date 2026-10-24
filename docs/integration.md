@@ -211,7 +211,7 @@ A folder in no backend is still checked: a bare clone of a registered repository
 - git 2.41 or later.
 - sha1 commit ids.
 - A full clone: not shallow (`git fetch --unshallow origin`), and not a partial clone.
-- A tracking ref for every branch of the remote: `remote.origin.fetch` must map `refs/heads/*` to `refs/remotes/origin/*`. A single-branch clone and a bare clone have none. Run `git remote set-branches origin '*'`, then `git fetch --prune origin`. Until then the CLI cannot see the config committed on the remote's trunk and says the gate is off, while the gate reads the remote itself and refuses.
+- A tracking ref for every branch of the remote: `remote.origin.fetch` must map `refs/heads/*` to `refs/remotes/origin/*`. A single-branch clone tracks only some branches, and a bare clone tracks none. The CLI and the gate both refuse such a clone of a repository with the pipeline, and name the repair: run `git remote set-branches origin '*'`, then `git fetch --prune origin`.
 - An empty `info/attributes` in the git folder: move its lines to `.gitattributes`. Also no `merge.text.*`, `merge.binary.*` or `merge.union.*` key in any config scope. Both would change what git shows of a commit, so they are refused in jj repositories too.
 
 ### How git is read
@@ -220,7 +220,7 @@ Every git read runs with git's environment cleared, except the transport setting
 
 ### Bare-repository worktrees
 
-Each worktree that runs a pipeline command registers as a worktree of its clone. `pipeline.local.json` lives in the bare folder (`<repo>.git/pipeline.local.json`), which the gate protects, so only the user edits it. `deploy.command` there must be an absolute or `~/` path, since a relative one would depend on the worktree that ran it. A deploy script run from outside every worktree acts on the clone of the worktree it runs in, else the clone whose worktree holds it, else the only clone with a worktree left. When two clones could be the one, the deploy revision must be a full commit id.
+Each worktree that runs a pipeline command registers as a worktree of its clone. `pipeline.local.json` lives in the bare folder (`<repo>.git/pipeline.local.json`), which the gate protects, so only the user edits it. A relative `deploy.command` is read from each worktree that registers, so each worktree's copy of the script is registered as its own. An absolute or `~/` path names one script for every worktree. A deploy script run inside a worktree acts on that worktree's clone. Run from outside every worktree, it acts on the clone whose worktree holds it, else the only clone with a worktree left. When two clones could be the one, the deploy revision must be a full commit id.
 
 ### The hook in every worktree
 
