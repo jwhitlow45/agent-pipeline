@@ -4,6 +4,7 @@
 
 import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1915,6 +1916,62 @@ describe('plain git: clones the reads need in full, with and without the pipelin
     const own = gate('git push origin HEAD:refs/heads/ci/x', box.repo);
     assert.equal(own.code, 2);
     assert.match(own.err, /git 2\.39 is older than 2\.41/);
+  });
+});
+
+// A machine with only git: nothing outside a jj workspace runs jj, so a folder in no repository is
+// in none, and a run is found from its own repository.
+describe('plain git with jj absent from PATH', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, match: 'release\\.sh' } }, backend: 'git' });
+  after(() => box.cleanup());
+  const bin = join(box.root, 'bin');
+  box.sh(`mkdir -p ${JSON.stringify(bin)}`, box.root);
+  for (const tool of ['git', 'sh']) box.sh(`ln -s "$(command -v ${tool})" ${JSON.stringify(join(bin, tool))}`, box.root);
+  box.sh(`ln -s ${JSON.stringify(process.execPath)} ${JSON.stringify(join(bin, 'node'))}`, box.root);
+  box.write('scripts/release.sh', '#!/bin/sh\necho deploying "$@"\n', box.root);
+  box.sh(`chmod +x ${JSON.stringify(join(box.root, 'scripts', 'release.sh'))}`, box.root);
+  box.write('pipeline.local.json', JSON.stringify({ deploy: { command: `${join(box.root, 'scripts', 'release.sh')} {name} {tip}` } }));
+  assert.equal(box.cli(['config', '--check']).code, 0);
+  assert.equal(box.cli(['intake', '--run', 'nojj', '--kind', 'fast', '--words', 'Add a dark mode toggle.']).code, 0);
+  const main = box.sh('git rev-parse main').trim();
+  const outside = join(box.root, 'outside');
+  box.sh(`mkdir -p ${JSON.stringify(outside)}`, box.root);
+  const env = { PATH: bin };
+  const gate = (command, cwd) => box.cli(['gate'], { input: JSON.stringify({ tool_input: { command }, cwd }), extra: env });
+
+  test('jj is not on this PATH', () => {
+    assert.equal(spawnSync('jj', ['--version'], { env: { ...box.env, ...env } }).error?.code, 'ENOENT');
+  });
+
+  test('a push from a folder in no repository is not the gate\'s, and from the worktree it is checked', () => {
+    const away = gate('git push origin HEAD:refs/heads/ci/x', outside);
+    assert.equal(away.code, 0, away.err);
+    const home = gate('git push origin HEAD:refs/heads/ci/x', box.repo);
+    assert.equal(home.code, 0, home.err);
+    assert.match(gate(`git push origin ${main}:refs/heads/main`, box.repo).err, /Moving main is a deploy step/);
+  });
+
+  test('a deploy run from a folder in no repository is checked in the registered clone', () => {
+    const result = gate(`${join(box.root, 'scripts', 'release.sh')} b1 ${main}`, outside);
+    assert.equal(result.code, 2);
+    assert.match(result.err, new RegExp(`No pipeline run records ${main.slice(0, 12)}`));
+  });
+
+  test('a run\'s command from a folder in no repository finds the run\'s own repository', () => {
+    const result = box.cli(['status', '--run', 'nojj'], { cwd: outside, extra: env });
+    assert.equal(result.code, 0, result.all);
+  });
+
+  test('a bare clone of the pipeline repository and a git worktree of a jj repository stay refused', () => {
+    const bare = join(box.root, 'bare.git');
+    const jjRepo = join(box.root, 'jj-repo');
+    const jjTree = join(box.root, 'jj-wt');
+    box.sh(`git clone -q --bare https://github.com/${SLUG}.git ${JSON.stringify(bare)}`, box.root);
+    box.sh(`mkdir -p ${JSON.stringify(jjRepo)} && cd ${JSON.stringify(jjRepo)} && jj git init --colocate >/dev/null 2>&1 && echo x > x.txt && jj commit -m x >/dev/null 2>&1 && git worktree add -q ${JSON.stringify(jjTree)}`, box.root);
+    for (const extra of [env, {}]) {
+      assert.match(box.cli(['gate'], { input: JSON.stringify({ tool_input: { command: 'git push origin main:refs/heads/ci/x' }, cwd: bare }), extra }).err, /is in a git repository with the pipeline but in no worktree of it/);
+      assert.match(box.cli(['gate'], { input: JSON.stringify({ tool_input: { command: 'git push origin HEAD:refs/heads/ci/x' }, cwd: jjTree }), extra }).err, /is a git worktree of the jj repository/);
+    }
   });
 });
 
