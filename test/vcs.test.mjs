@@ -178,7 +178,17 @@ describe('conflict marker labels in the normalized git id', () => {
   };
   const first = merge(base);
   const moved = merge(on([base], 'feat: base two', { 'd.txt': 'd\n' }));
-  const tips = { before1, after1, first, moved };
+  // A merge that drops a line both its parents keep: the removed line is the merge's own content,
+  // whatever it looks like.
+  const dropping = (label) => {
+    const kept = on([base], `docs: keep a marker line ${label}`, { 'k.txt': `<<<<<<< ${label}\nx\n` });
+    const left = on([kept], 'feat: a side file', { 's.txt': 's\n' });
+    const right = on([kept], 'feat: another side file', { 't.txt': 't\n' });
+    return on([left, right], 'merge: drop the marker line', { 'k.txt': 'x\n' });
+  };
+  const dropBefore = dropping('before');
+  const dropAfter = dropping('after');
+  const tips = { before1, after1, first, moved, dropBefore, dropAfter };
   for (const [name, id] of Object.entries(tips)) box.sh(`jj bookmark set t-${name.toLowerCase()} -r ${id}`);
   box.sh('jj git push --all --allow-new 2>/dev/null || jj git push --all');
   const clone = join(box.root, 'clone');
@@ -192,12 +202,28 @@ describe('conflict marker labels in the normalized git id', () => {
       assert.equal(sameChange(record(backend, before1), record(backend, after1)), false);
     });
 
+    test(`two merges that drop different marker lines are different changes (${backend})`, () => {
+      assert.ok(record(backend, dropBefore).gitId);
+      assert.notEqual(record(backend, dropBefore).gitId, record(backend, dropAfter).gitId);
+      assert.equal(sameChange(record(backend, dropBefore), record(backend, dropAfter)), false);
+    });
+
     test(`a conflicted merge made again on moved parents keeps its id (${backend})`, () => {
       assert.ok(record(backend, first).gitId);
       assert.equal(record(backend, moved).gitId, record(backend, first).gitId);
       assert.equal(sameChange(record(backend, first), record(backend, moved)), true);
     });
   }
+
+  // git abbreviates a label's id to core.abbrev, so the label is matched by prefix.
+  test('a clone that abbreviates ids to another length gives the same id', () => {
+    box.sh('git config core.abbrev 16', clone);
+    try {
+      assert.equal(vcsAt(clone).readCommits([first])[0].gitId, record('git', first).gitId);
+    } finally {
+      box.sh('git config --unset core.abbrev', clone);
+    }
+  });
 });
 
 // Each read splits commits by a marker made for that read alone, so a file whose text looks like a
