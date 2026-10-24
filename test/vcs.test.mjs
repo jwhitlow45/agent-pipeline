@@ -7,6 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { buildHistory } from './fixtures/history.mjs';
 import { sandbox } from './helpers.mjs';
+import { sameChange } from '../lib/change.mjs';
 import { range, resolveOne, RevisionError, vcsAt } from '../lib/vcs.mjs';
 import { gitPatchIds, where } from '../lib/vcs-git.mjs';
 
@@ -151,4 +152,48 @@ describe('one history read by jj colocated, jj not colocated and plain git', () 
     assert.match(patches.get(ids.conflictMerge), /^\+both$/m);
     assert.match(patches.get(ids.nonAscii), /^\+\+\+ b\/naïve résumé\.txt\t?$/m);
   });
+});
+
+// A remerge diff labels its conflict markers with each side's short id and subject, which a rebase
+// changes, so those labels are left out of the id. A commit that adds such a line holds it as
+// content, so the id keeps it.
+describe('conflict marker labels in the normalized git id', () => {
+  const box = sandbox();
+  after(() => box.cleanup());
+  Object.assign(process.env, box.env);
+  before(() => Object.assign(process.env, box.env));
+  const base = box.commit('feat: base', { 'c.txt': 'shared\n' });
+  const on = (parents, message, files) => {
+    box.sh(`jj new ${parents.join(' ')}`);
+    return box.commit(message, files);
+  };
+  const before1 = on([base], 'docs: a marker line', { 'm.txt': '<<<<<<< before\nx\n' });
+  const after1 = on([base], 'docs: a marker line', { 'm.txt': '<<<<<<< after\nx\n' });
+  const merge = (onto) => {
+    const left = on([onto], 'feat: left side', { 'c.txt': 'left\n' });
+    const right = on([onto], 'feat: right side', { 'c.txt': 'right\n' });
+    return on([left, right], 'merge: resolve left and right', { 'c.txt': 'both\n' });
+  };
+  const first = merge(base);
+  const moved = merge(on([base], 'feat: base two', { 'd.txt': 'd\n' }));
+  const tips = { before1, after1, first, moved };
+  for (const [name, id] of Object.entries(tips)) box.sh(`jj bookmark set t-${name.toLowerCase()} -r ${id}`);
+  box.sh('jj git push --all --allow-new 2>/dev/null || jj git push --all');
+  const clone = join(box.root, 'clone');
+  box.sh(`git clone -q ${JSON.stringify(box.bare)} ${JSON.stringify(clone)}`, box.root);
+  const records = { jj: vcsAt(box.repo).readCommits(Object.values(tips)), git: vcsAt(clone).readCommits(Object.values(tips)) };
+  const record = (backend, id) => records[backend].find((commit) => commit.id === id);
+
+  for (const backend of ['jj', 'git']) {
+    test(`two commits that add different marker lines are different changes (${backend})`, () => {
+      assert.notEqual(record(backend, before1).gitId, record(backend, after1).gitId);
+      assert.equal(sameChange(record(backend, before1), record(backend, after1)), false);
+    });
+
+    test(`a conflicted merge made again on moved parents keeps its id (${backend})`, () => {
+      assert.ok(record(backend, first).gitId);
+      assert.equal(record(backend, moved).gitId, record(backend, first).gitId);
+      assert.equal(sameChange(record(backend, first), record(backend, moved)), true);
+    });
+  }
 });
