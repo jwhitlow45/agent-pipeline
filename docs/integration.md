@@ -238,7 +238,7 @@ In plain git the pre-push hook runs for every `git push`, the user's too. Withou
 PIPELINE_USER_PUSH=1 git push origin <full id>:refs/heads/main
 ```
 
-With the marker, the hook skips the rules for agents. A push to trunk must still fast-forward the trunk the remote reports, and its commit must pass the live-hole embargo and the deploy check. Every other push passes. Only the user sets it, in a terminal outside the agent: the gate refuses a line that sets it, and refuses every push while the gate's own environment holds it, so start agents from a shell without it. `--no-verify` skips the hook entirely. The gate refuses that for agents.
+With the marker, the hook skips the rules for agents. A push to trunk must still fast-forward the trunk the remote reports, and its commit must pass the live-hole embargo and the deploy check. Every other push passes. The hook reads the remote only for a push that may move trunk: one to the registered trunk or `main`, to a branch the config committed at its remote tip or at the pushed commit names as trunk, or one it cannot tell. So a stale view never stops the user's other pushes. Only the user sets it, in a terminal outside the agent: the gate refuses a line that sets it, and refuses every push while the gate's own environment holds it, so start agents from a shell without it. `--no-verify` skips the hook entirely. The gate refuses that for agents.
 
 ### What differs between the two
 

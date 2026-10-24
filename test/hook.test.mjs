@@ -3,7 +3,7 @@
 
 import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { baseConfig, builtRun, ciScript, sandbox, SLUG } from './helpers.mjs';
 
@@ -146,5 +146,37 @@ describe('the user\'s own push in plain git (deploy.runBy user)', () => {
     assert.throws(() => push(box, `git push origin ${tip}:refs/heads/feature-3`, box.repo, { PIPELINE_USER_PUSH: 'yes' }), /feature-3 is not a branch agents push to/);
     assert.equal(onRemote(box, 'feature-3'), null);
     assert.match(box.cli(['gate'], { input: JSON.stringify({ tool_input: { command: `git push origin ${tip}:refs/heads/ci/x` }, cwd: box.repo }), extra: USER }).err, /PIPELINE_USER_PUSH is set in the environment the agent runs in/);
+  });
+});
+
+// Before the gate first registers a repository, the registry names no trunk, so the hook reads the
+// trunk from the config committed at the remote's tip of each branch the push names.
+describe('the user\'s push to a custom trunk the registry does not record', () => {
+  const box = sandbox({ config: { ...baseConfig, trunk: 'stable', deploy: { ...baseConfig.deploy, runBy: 'user' } }, backend: 'git' });
+  after(() => box.cleanup());
+  const USER = { PIPELINE_USER_PUSH: '1' };
+  // Each refused push registers the repository, so each case starts without the registry.
+  const unregister = () => rmSync(join(box.env.AGENT_PIPELINE_STATE, 'repos.json'), { force: true });
+
+  test('is checked by remote name, by URL, through a second remote name and among other branches', () => {
+    box.sh('git push -q --no-verify origin main:refs/heads/stable');
+    const stable = onRemote(box, 'stable');
+    const next = box.commit('feat: on the custom trunk', { 'next.txt': 'x\n' });
+    box.sh(`git remote add upstream https://github.com/${SLUG}.git`);
+    const commands = [
+      `git push origin ${next}:refs/heads/stable`,
+      `git push https://github.com/${SLUG}.git ${next}:refs/heads/stable`,
+      `git push upstream ${next}:refs/heads/stable`,
+      `git push origin ${next}:refs/heads/feature ${next}:refs/heads/stable`,
+    ];
+    for (const command of commands) {
+      unregister();
+      assert.throws(() => push(box, command, box.repo, USER), /refused this push of yours:\n[\s\S]*- stable: Moving stable is a deploy step: No pipeline run records/, command);
+    }
+    assert.equal(onRemote(box, 'stable'), stable);
+    assert.equal(onRemote(box, 'feature'), null);
+    unregister();
+    push(box, `git push -q origin ${next}:refs/heads/feature`, box.repo, USER);
+    assert.equal(onRemote(box, 'feature'), next);
   });
 });
