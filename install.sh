@@ -55,10 +55,11 @@ else process.stdout.write(text);
 NODE
 }
 
-# The CLI needs node 22 or later, jj, git and gh.
+# The CLI needs node 22 or later, git 2.41 or later and gh, and jj for jj repositories.
 missing=
-for tool in node jj git gh; do command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"; done
-[ -z "$missing" ] || say "warning: not on PATH:$missing. The pipeline needs node 22+, jj, git and gh."
+for tool in node git gh; do command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"; done
+[ -z "$missing" ] || say "warning: not on PATH:$missing. The pipeline needs node 22+, git 2.41+ and gh."
+command -v jj >/dev/null 2>&1 || say "note: jj is not on PATH. The pipeline needs it only for jj repositories."
 if command -v node >/dev/null 2>&1; then
   major=$(node -p 'process.versions.node.split(".")[0]')
   [ "$major" -ge 22 ] || say "warning: node $major is older than 22."
@@ -129,7 +130,20 @@ if [ -n "$PROJECT" ]; then
     [ -z "$hooks_path" ] || say "note: core.hooksPath is $hooks_path, so the hook goes in $hooks_dir."
     act ln -s "$ROOT/git-hooks/pre-push" "$hooks_dir/pre-push"
   fi
-  say "note: jj git push does not run git hooks. The gate checks agents' jj pushes, and pipeline exec -- jj git push ... checks one by hand."
+  # A relative or worktree-scoped core.hooksPath gives a worktree its own hooks folder, and a push
+  # there runs no hook unless it is linked there too.
+  if [ -n "$hooks_dir" ]; then
+    git -C "$PROJECT" worktree list --porcelain 2>/dev/null | sed -n 's/^worktree //p' | while IFS= read -r tree; do
+      [ -d "$tree" ] || continue
+      dir=$(git -C "$tree" rev-parse --path-format=absolute --git-path hooks 2>/dev/null || true)
+      if [ -n "$dir" ] && [ "$dir" != "$hooks_dir" ]; then
+        say "note: the worktree $tree runs hooks from $dir, not $hooks_dir. Link the hook there too: ln -s $ROOT/git-hooks/pre-push $dir/pre-push"
+      fi
+    done
+  fi
+  if [ -d "$PROJECT/.jj" ]; then
+    say "note: jj git push does not run git hooks. The gate checks agents' jj pushes, and pipeline exec -- jj git push ... checks one by hand."
+  fi
 fi
 
 say "Done. Run: pipeline --help"

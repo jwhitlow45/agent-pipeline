@@ -72,6 +72,39 @@ test('another pipeline first on PATH is reported, and so is a hooks folder git d
   assert.equal(readlinkSync(join(project, '.git', 'hooks', 'pre-push')), join(box.root, 'git-hooks', 'pre-push'));
 });
 
+test('in a git project the hook goes where git looks, and each worktree that looks elsewhere is named', () => {
+  const box = scratch();
+  const project = join(box.base, 'git-project');
+  mkdirSync(project);
+  const git = (args, cwd = project) => spawnSync('git', args, { cwd, encoding: 'utf8', env: { ...process.env, GIT_CONFIG_GLOBAL: join(box.base, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' } });
+  writeFileSync(join(box.base, 'gitconfig'), '[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n');
+  git(['init', '-q']);
+  writeFileSync(join(project, 'README.md'), '# x\n');
+  git(['add', '-A']);
+  git(['commit', '-q', '-m', 'chore: start']);
+  // A worktree-scoped hooks path, as husky's relative one gives, sends the linked worktree elsewhere.
+  git(['config', 'extensions.worktreeConfig', 'true']);
+  const tree = join(box.base, 'git-project-lane');
+  git(['worktree', 'add', '-q', '-b', 'lane/x', tree]);
+  git(['config', '--worktree', 'core.hooksPath', join(box.base, 'lane-hooks')], tree);
+  const result = box.install(['--project', project], { GIT_CONFIG_GLOBAL: join(box.base, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' });
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(readlinkSync(join(project, '.git', 'hooks', 'pre-push')), join(box.root, 'git-hooks', 'pre-push'));
+  assert.match(result.stdout, new RegExp(`note: the worktree ${tree.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} runs hooks from \\S*lane-hooks, not \\S+\\.git/hooks\\. Link the hook there too`));
+  assert.doesNotMatch(result.stdout, /jj git push does not run git hooks/);
+});
+
+test('jj is needed only for jj repositories', () => {
+  const box = scratch();
+  const bin = join(box.base, 'path-bin');
+  mkdirSync(bin);
+  symlinkSync(process.execPath, join(bin, 'node'));
+  const result = box.install([], { PATH: `${bin}:/usr/bin:/bin` });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /note: jj is not on PATH\. The pipeline needs it only for jj repositories\./);
+  assert.doesNotMatch(result.stdout, /warning: not on PATH:.*jj/);
+});
+
 test('a test run leaves the temporary folder as it found it, even when its tests fail, hang or are killed', () => {
   const tmp = tempDir('pipeline-tmpcount-');
   const fixture = join(dirname(fileURLToPath(import.meta.url)), 'fixtures', 'temp-suite.mjs');

@@ -1,7 +1,11 @@
 #!/bin/sh
-# git pre-push hook: runs the pipeline's push checks for `git push` in a colocated jj repository.
+# git pre-push hook: runs the pipeline's push checks for `git push`, in a plain git repository or a
+# colocated jj repository. git runs it from the root of the worktree that pushes, so every worktree
+# must find it where its hooks path points (pipeline doctor lists each one).
 # jj git push does not run git hooks, so jj pushes rely on the agent's PreToolUse hook or on
 # `pipeline exec -- jj git push ...`.
+# The user's own push carries PIPELINE_USER_PUSH=1, which skips the rules for agents. A push to trunk
+# is still checked as a deploy step. --no-verify skips the hook entirely.
 # Install: ln -s <agent-pipeline>/git-hooks/pre-push .git/hooks/pre-push (install.sh --project does it).
 # git passes the remote name as $1, the URL it pushes to as $2, and the refs on stdin.
 self=$0
