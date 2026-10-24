@@ -1624,8 +1624,16 @@ describe('jj: clones of one repository', () => {
     ['second', deploy('@-'), 2, new RegExp(`No pipeline run records ${tip.slice(0, 12)}`)],
     ['root', deploy('@-'), 2, /names a working copy, and this runs outside the repository's workspaces/],
     ['root', merge, 2, /could not read pull request 7/],
-    // The first clone moves away: the second still holds the repository.
-    { name: 'the first clone moves away', setup: (b, v) => b.sh(`mv ${JSON.stringify(v.first)} ${JSON.stringify(join(b.root, 'moved'))}`, b.root) },
+    // Another pipeline repository takes the first clone's folder, before any command registers again:
+    // the store has the registered path, but the policy there is another repository's. The second
+    // clone still holds this one.
+    { name: 'another pipeline repository takes the first clone\'s folder', setup: (b, v) => {
+      const other = join(b.root, 'other.git');
+      const seed = join(b.root, 'other-seed');
+      b.sh(`git init -q --bare ${JSON.stringify(other)} && git config --global url.${JSON.stringify(other)}.insteadOf https://github.com/other-owner/other.git`, b.root);
+      b.sh(`git clone -q ${JSON.stringify(other)} ${JSON.stringify(seed)} && cp ${JSON.stringify(join(b.repo, 'pipeline.config.json'))} ${JSON.stringify(seed)}/ && cd ${JSON.stringify(seed)} && git add -A && git commit -q -m "chore: config" && git push -q origin HEAD:refs/heads/main`, b.root);
+      b.sh(`mv ${JSON.stringify(v.first)} ${JSON.stringify(join(b.root, 'moved'))} && jj git clone --colocate https://github.com/other-owner/other.git ${JSON.stringify(v.first)} >/dev/null 2>&1`, b.root);
+    } },
     ['root', merge, 2, /could not read pull request 7/],
     { name: 'the second clone moves away too', setup: (b, v) => b.sh(`mv ${JSON.stringify(v.second)} ${JSON.stringify(join(b.root, 'moved-second'))}`, b.root) },
     ['root', merge, 2, /no clone of it on this machine still holds it/],
