@@ -5,7 +5,7 @@ import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { baseConfig, builtRun, ciScript, sandbox } from './helpers.mjs';
+import { baseConfig, builtRun, ciScript, sandbox, SLUG } from './helpers.mjs';
 
 const HOOK = join(import.meta.dirname, '..', 'git-hooks', 'pre-push');
 const UNSCANNED = /without a passed pre-push scan/;
@@ -121,6 +121,25 @@ describe('the user\'s own push in plain git (deploy.runBy user)', () => {
     push(box, `git push -q origin ${side}:refs/heads/feature`, box.repo, USER);
     assert.equal(onRemote(box, 'feature'), side);
     assert.throws(() => push(box, `git push origin ${side}:refs/heads/feature-2`), REFUSED);
+  });
+
+  // The context reads the remote and this clone's view of it, so with the marker it opens only for a
+  // push to trunk: a stale view stops a trunk move, never the user's other pushes.
+  test('with a stale view, the user\'s branch push passes and a trunk move is refused, by any remote name', () => {
+    const other = join(box.root, 'other-clone');
+    box.sh(`git clone -q https://github.com/${SLUG}.git ${JSON.stringify(other)} && git -C ${JSON.stringify(other)} push -q --no-verify origin HEAD:refs/heads/someone`, box.root);
+    push(box, `git push -q origin ${tip}:refs/heads/feature-stale`, box.repo, USER);
+    assert.equal(onRemote(box, 'feature-stale'), tip);
+    box.setBranch('main', tip);
+    const next = box.commit('feat: after the deploy', { 'next.txt': 'x\n' });
+    const STALE = /refused this push of yours:\n[\s\S]*git fetch --prune origin/;
+    assert.throws(() => push(box, `git push origin ${next}:refs/heads/main`, box.repo, USER), STALE);
+    // A second remote name for the same repository moves the same trunk.
+    box.sh(`git remote add upstream https://github.com/${SLUG}.git`);
+    assert.throws(() => push(box, `git push upstream ${next}:refs/heads/main`, box.repo, USER), STALE);
+    box.sh('git fetch -q --prune origin');
+    assert.throws(() => push(box, `git push upstream ${next}:refs/heads/main`, box.repo, USER), /main: Moving main is a deploy step: No pipeline run records/);
+    assert.equal(onRemote(box, 'main'), tip);
   });
 
   test('the marker counts only as PIPELINE_USER_PUSH=1', () => {
