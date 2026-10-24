@@ -1482,3 +1482,40 @@ describe('the checks that had no row, and functions and env words (round 7)', ()
     ['repo', 'IFS=/; env -i HOME=$HOME PATH=/usr/bin:/bin ls', 2, DYNAMIC],
   ]);
 });
+
+// R8-1: a line with no push, deploy, merge, dispatch, API write, review start or bookmark set passes
+// whatever joins its commands. Beside each form, a control that holds a push in the same form, which
+// the plain-form rules still refuse.
+describe('a line of reads in any form (round 8)', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  runRows(box, { repo: box.repo }, [
+    // ;
+    ['repo', 'git status; git log -3', 0],
+    ['repo', 'jj st; jj log -r @', 0],
+    ['repo', 'gh pr list; gh run list', 0],
+    ['repo', 'git status; git push', 2, SEPARATOR],
+    // ||
+    ['repo', 'git diff --stat || echo none', 0],
+    ['repo', 'git fetch origin && git status || echo fail', 0],
+    ['repo', 'git status || true', 0],
+    ['repo', 'jj st || jj git push', 2, SEPARATOR],
+    // A loop. Its folder may come from the loop's variable, quoted, so it stays one word, but no
+    // other word may.
+    ['repo', 'for d in a b; do git -C "$d" status; done', 0],
+    ['repo', 'for w in a b; do jj -R "$w" log -r @; done', 0],
+    ['repo', 'for d in a b; do git -C $d status; done', 2, SEPARATOR],
+    ['repo', 'for r in a b; do git log -1 "$r"; done', 2, SEPARATOR],
+    ['repo', 'for b in a; do git push origin "$b"; done', 2, SEPARATOR],
+    // A pipe into any program but a tool or a shell, which would read input the gate cannot see.
+    ['repo', 'jj diff | less', 0],
+    ['repo', 'git branch -a | xargs echo', 0],
+    ['repo', 'git diff | git apply', 2, PIPE],
+    ['repo', 'git log | xargs git push', 2, PIPE],
+    // Input redirected into a group reaches every command in it.
+    ['repo', '{ git apply; } < fix.patch', 2, SEPARATOR],
+    // A cd anywhere.
+    ['repo', 'cd .. && cd demo && jj st', 0],
+    ['repo', 'cd .. && cd demo && jj git push -b ci/fresh', 2, /a cd may only come first/],
+  ]);
+});
