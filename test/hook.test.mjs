@@ -210,4 +210,28 @@ describe('the user\'s push to a fork through a pushurl', () => {
     assert.match(box.gate(`git push origin ${second}:refs/heads/ci/fork`).err, ELSEWHERE);
     assert.equal(onFork('ci/fork'), null);
   });
+
+  // An SSH host alias names whatever host the ssh config maps it to, so the hook cannot tell which
+  // repository it reaches. A stand-in ssh serves the alias from the sandbox's own repositories.
+  test('a push through an SSH host alias or another spelling of the repository is checked, a fork on github.com passes', () => {
+    const ssh = join(box.root, 'fake-ssh');
+    writeFileSync(ssh, `#!/bin/sh\nfor last; do :; done\ncase "$last" in *fork*) repo=${JSON.stringify(fork)} ;; *) repo=${JSON.stringify(box.bare)} ;; esac\ncase "$last" in git-receive-pack*) exec git receive-pack "$repo" ;; git-upload-pack*) exec git upload-pack "$repo" ;; esac\nexit 1\n`);
+    chmodSync(ssh, 0o755);
+    const SSH = { GIT_SSH_COMMAND: ssh, GIT_SSH_VARIANT: 'simple' };
+    const ALIAS = `git@github-personal:${SLUG}.git`;
+    const main = onRemote(box, 'main');
+    const third = box.commit('feat: through an alias', { 'fork.txt': '3\n' });
+    box.sh(`git config remote.origin.pushurl ${ALIAS}`);
+    assert.throws(() => push(box, 'git push origin main', box.repo, { ...USER, ...SSH }), /refused this push of yours:\n[\s\S]*A push to origin would go to git@github-personal:/);
+    // The push through the fork's pushurl moved git's origin/main, so the view is fetched again.
+    box.sh('git config --unset remote.origin.pushurl && git fetch -q --prune origin');
+    box.sh(`git remote add personal ${ALIAS}`);
+    for (const command of [`git push ${ALIAS} ${third}:refs/heads/main`, `git push personal ${third}:refs/heads/main`, `git push file://${box.bare} ${third}:refs/heads/main`]) {
+      assert.throws(() => push(box, command, box.repo, { ...USER, ...SSH }), /refused this push of yours:\n[\s\S]*git is pushing to (git@github-personal:|file:)\S*, not to /, command);
+    }
+    assert.equal(onRemote(box, 'main'), main);
+    assert.throws(() => push(box, `git push personal ${third}:refs/heads/ci/alias`, box.repo, SSH), /agents push only to origin, by name, not personal/);
+    push(box, `git push -q git@github.com:someone/fork.git ${third}:refs/heads/main`, box.repo, { ...USER, ...SSH });
+    assert.equal(onFork('main'), third);
+  });
 });
