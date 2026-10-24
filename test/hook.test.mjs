@@ -180,3 +180,34 @@ describe('the user\'s push to a custom trunk the registry does not record', () =
     assert.equal(onRemote(box, 'feature'), next);
   });
 });
+
+// A pushurl can send a remote's pushes to the user's fork, another repository, so the user's push
+// there is not checked. A push that reaches the repository itself still is, and so is an agent's.
+describe('the user\'s push to a fork through a pushurl', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user' } }, backend: 'git' });
+  after(() => box.cleanup());
+  const USER = { PIPELINE_USER_PUSH: '1' };
+  const fork = join(box.root, 'fork.git');
+  const onFork = (branch) => box.sh(`git --git-dir=${JSON.stringify(fork)} rev-parse --verify --quiet refs/heads/${branch} || true`, box.root).trim() || null;
+
+  test('passes by remote name and by the fork\'s URL, and a push that reaches the repository is still checked', () => {
+    assert.equal(box.cli(['status']).code, 0);
+    const main = onRemote(box, 'main');
+    box.sh(`git init -q --bare ${JSON.stringify(fork)} && git config remote.origin.pushurl ${JSON.stringify(fork)}`);
+    const first = box.commit('feat: for the fork', { 'fork.txt': '1\n' });
+    push(box, 'git push -q origin main', box.repo, USER);
+    assert.equal(onFork('main'), first);
+    const second = box.commit('feat: for the fork again', { 'fork.txt': '2\n' });
+    push(box, `git push -q ${JSON.stringify(fork)} ${second}:refs/heads/main`, box.repo, USER);
+    assert.equal(onFork('main'), second);
+    // A second remote whose fetch and push both reach the repository moves its trunk.
+    box.sh(`git remote add upstream https://github.com/${SLUG}.git`);
+    const ELSEWHERE = /A push to origin would go to .*fork\.git, not to/;
+    assert.throws(() => push(box, `git push upstream ${second}:refs/heads/main`, box.repo, USER), new RegExp(`refused this push of yours:\\n[\\s\\S]*${ELSEWHERE.source}`));
+    assert.equal(onRemote(box, 'main'), main);
+    // Without the marker, the hook and the gate refuse an agent's push through the fork's pushurl.
+    assert.throws(() => push(box, `git push origin ${second}:refs/heads/ci/fork`), new RegExp(`refused this push:\\n[\\s\\S]*${ELSEWHERE.source}`));
+    assert.match(box.gate(`git push origin ${second}:refs/heads/ci/fork`).err, ELSEWHERE);
+    assert.equal(onFork('ci/fork'), null);
+  });
+});
