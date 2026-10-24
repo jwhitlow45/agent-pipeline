@@ -1775,6 +1775,10 @@ describe('plain git: the review provider is the committed config\'s', () => {
   runRows(box, { repo: box.repo }, [
     ['repo', 'gh pr create --title x', 2, /review\.provider is "agent-review", which reads jj repositories only/],
     ['repo', 'gh pr create --draft --title x', 0],
+    // A draft opens no review, through the API too.
+    ['repo', `gh api -X POST repos/${SLUG}/pulls -f head=ci/x -f base=main -f title=x -f draft=true`, 0],
+    ['repo', `gh api -X POST repos/${SLUG}/pulls -f head=ci/x -f base=main -f title=x -F draft=true`, 0],
+    ['repo', `gh api -X POST repos/${SLUG}/pulls -f head=ci/x -f base=main -f title=x`, 2, /review\.provider is "agent-review", which reads jj repositories only/],
   ]);
 });
 
