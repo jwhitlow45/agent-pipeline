@@ -126,6 +126,8 @@ describe('one history read by jj colocated, jj not colocated and plain git', () 
       assert.equal(vcs.exists('f'.repeat(40)), false, name);
       assert.deepEqual(vcs.filesAt(ids.conflictMerge).sort(), backends.jj.filesAt(ids.conflictMerge).sort(), name);
       assert.equal(vcs.isOnRemote(ids.x1, 'origin'), true, name);
+      // A clone's origin/HEAD sorts before every branch, and names no branch of its own.
+      assert.equal(vcs.isOnRemote(ids.base, 'origin'), true, name);
       assert.deepEqual(vcs.remoteBranches('origin').map((entry) => `${entry.name} ${entry.target}`).sort(), [`main ${ids.conflictMerge}`, `orphan ${ids.orphan}`, `x2 ${ids.x2}`, `y2 ${ids.y2}`], name);
       assert.equal(resolveOne(vcs, ids.x1.slice(0, 12)), ids.x1, name);
     }

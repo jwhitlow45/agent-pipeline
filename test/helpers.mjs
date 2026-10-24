@@ -93,7 +93,8 @@ export function sandbox({ config = {}, local = null, backend = 'jj' } = {}) {
   writeFileSync(join(repo, '.gitignore'), 'pipeline.local.json\n');
   writeFileSync(join(repo, 'README.md'), '# demo\n');
   if (jjLike) sh('jj commit -m "chore: scaffold" && jj bookmark set main -r @- && jj git push --bookmark main');
-  else sh('git add -A && git commit -q -m "chore: scaffold" && git push -q origin HEAD:refs/heads/main');
+  // A clone records the remote's default branch as origin/HEAD, so the git sandbox does too.
+  else sh('git add -A && git commit -q -m "chore: scaffold" && git push -q origin HEAD:refs/heads/main && git remote set-head origin -a >/dev/null');
 
   const box = {
     root, repo, bare, env, sh, backend,
