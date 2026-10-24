@@ -332,3 +332,33 @@ describe('what a git repository must be, and the runner\'s environment', () => {
     assert.equal(hookOf(linked).state, 'ok');
   });
 });
+
+// The CLI reads the remote through git's tracking refs, so a remote it reads that tracks only some
+// branches gets the same refusal the gate gives, never a report that the gate is off.
+describe('the CLI and a remote that tracks only some branches', () => {
+  const box = sandbox({ backend: 'git' });
+  after(() => box.cleanup());
+  const SET_BRANCHES = (remote) => new RegExp(`git fetches only some branches of ${remote} here.*git remote set-branches ${remote} '\\*'`);
+
+  test('a bare clone\'s worktree without a fetch refspec', () => {
+    const bare = join(box.root, 'bare.git');
+    const tree = join(box.root, 'tree');
+    box.sh(`git clone -q --bare https://github.com/example-owner/demo.git ${JSON.stringify(bare)} && git -C ${JSON.stringify(bare)} worktree add -q ${JSON.stringify(tree)} -b t main`, box.root);
+    const result = box.cli(['config', '--check'], { cwd: tree });
+    assert.notEqual(result.code, 0, result.all);
+    assert.match(result.all, SET_BRANCHES('origin'));
+    assert.doesNotMatch(result.all, /the gate is off/);
+  });
+
+  test('the remote the committed config names, not the one read first', () => {
+    const redirected = sandbox({ config: { remote: 'upstream' }, backend: 'git' });
+    try {
+      redirected.sh(`git remote add -t main upstream https://github.com/example-owner/demo.git && git fetch -q upstream`);
+      const result = redirected.cli(['config', '--check']);
+      assert.notEqual(result.code, 0, result.all);
+      assert.match(result.all, SET_BRANCHES('upstream'));
+    } finally {
+      redirected.cleanup();
+    }
+  });
+});
