@@ -1,6 +1,6 @@
 #!/bin/sh
-# Runs pipeline.mjs with a node, gh and jj that hooks can find even when the calling app (such as a
-# desktop agent) starts without the login shell's PATH.
+# Runs pipeline.mjs with a node, git, gh and jj that hooks can find even when the calling app (such
+# as a desktop agent) starts without the login shell's PATH.
 PATH="$PATH:$HOME/.local/bin:$HOME/.cargo/bin:/opt/homebrew/bin:/usr/local/bin"
 node=$(command -v node || ls -d "$HOME"/.nvm/versions/node/*/bin/node 2>/dev/null | sort -V | tail -1)
 if [ -z "$node" ]; then

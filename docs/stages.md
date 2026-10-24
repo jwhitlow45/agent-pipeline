@@ -69,7 +69,9 @@ An ID counts as logged only where an entry starts with it: in a heading, as the 
 `pipeline lane --run R --lane L --workspace DIR --owns GLOBS --brief F [--base REV] [--db NAMES] [--env K=V,...]`
 
 - Needs intake and design passed.
-- The workspace must be the root of a jj workspace of the same repository, and no other open lane may use it.
+- The workspace must be the root of a jj workspace or a git worktree of the run's own repository, and no other open lane may use it. A separate clone of the same GitHub repository is refused, since its commits never reach the run's repository.
+- In git the worktree must be on a branch of its own (`git worktree add -b lane/<run>-<lane> <folder> <base id>`): not a detached HEAD, not trunk and not a `push.branches` match. The lane records that branch.
+- In git the worktree must run the pipeline's pre-push hook, wherever its hooks path points. A missing hook, or one git skips because it is not executable, refuses the lane. A hook the pipeline cannot verify (any other file, husky's chain included) passes with a warning to check it by hand.
 - `--owns` must not match a tracked file another open lane owns, in this run or any other open run of the repository. The check and the record are one step under a lock, so two lanes added at once cannot both claim a file.
 - The brief must quote the user's words, point at the shared preamble (`brief.preamble`), and name only logged decisions.
 - `--base` defaults to the remote trunk.
@@ -81,7 +83,7 @@ A lane stops owning its files when its run's cleanup passes or the run is abando
 `pipeline commits --run R --lane L [--tip REV] [--outside "path: reason"]...` records the lane's commits from its base to its tip and checks each one:
 
 - a conventional subject (`commits.types`), lowercase after the colon, one line, no em dash, no forbidden trailer
-- a signature jj reports as good (`commits.acceptedSignatures`)
+- a signature jj or git reports as good (`commits.acceptedSignatures`, and [config.md](config.md) for how git's signature codes read)
 - every touched file inside the lane's globs, unless `--outside` gives the reason
 - no file another open lane owns, a new file included
 - feature list and user docs changes in their own commit, never with code (`docs.separateCommit`)
@@ -95,19 +97,19 @@ A lane stops owning its files when its run's cleanup passes or the run is abando
 2. `checks.integration`, one after another
 3. `checks.e2e.command` for each chosen file and each `checks.e2e.always` file, one at a time, with `checks.e2e.beforeEach` before each. A file whose `beforeEach` fails or runs past `checks.e2e.beforeEachTimeoutSec` fails without running.
 
-It refuses a workspace with uncommitted changes, or one not on the lane's recorded tip. With `checks.stopOnFailure`, a failed phase stops the later ones, but the phase it is in finishes, so every failure there shows. On macOS it keeps the machine awake while it runs.
+It refuses a workspace with uncommitted changes, or one not on the lane's recorded tip. In git an untracked file or a changed submodule counts as uncommitted, whatever `.gitmodules` says, and a file flagged assume-unchanged or skip-worktree refuses, since git status cannot see edits to it. With `checks.stopOnFailure`, a failed phase stops the later ones, but the phase it is in finishes, so every failure there shows. On macOS it keeps the machine awake while it runs.
 
 `pipeline check --record NAME --exit CODE --log F` records a check run elsewhere, and refuses it until the earlier phases passed on the same tip.
 
-`pipeline check --run R --tip REV --workspace DIR` runs every check, every e2e file included, in a workspace whose working copy sits on that exact commit, and records the results for the commit. A run fixing a live hole deploys on these in place of CI.
+`pipeline check --run R --tip REV --workspace DIR` runs every check, every e2e file included, in a jj workspace whose working copy sits on that exact commit or a git worktree whose HEAD is it (`git worktree add --detach <folder> <id>`), and records the results for the commit. A run fixing a live hole deploys on these in place of CI.
 
 ### Mutation checks
 
-`pipeline mutation --run R --lane L --commit REV --test FILE` exports the commit's tree to a temporary folder, links `mutation.link` (such as `node_modules`), runs the test and expects a pass, then removes the commit's code changes (everything but tests and docs) and expects a failure. A test that still passes is refused: it does not test the fix. `--manual "<how>" --exit CODE` records a check done by hand, where the fix and its test are in different commits.
+`pipeline mutation --run R --lane L --commit REV --test FILE` writes the commit's exact files to a temporary folder (from a temporary index, with no filter, eol, ident or export rule applied, then checked file by file against the commit), links `mutation.link` (such as `node_modules`), runs the test and expects a pass, then removes the commit's code changes (everything but tests and docs) and expects a failure. A test that still passes is refused: it does not test the fix. `--manual "<how>" --exit CODE` records a check done by hand, where the fix and its test are in different commits.
 
 ### Integration
 
-`pipeline integrate --run R --tip REV` records the stacked tip of several lanes as the run's tip. It refuses a tip that lacks any lane commit, matched by patch-id, and lists the commits no lane made (conflict resolutions), which the scan, CI and review cover.
+`pipeline integrate --run R --tip REV` records the stacked tip of several lanes as the run's tip. It refuses a tip that lacks any lane commit, matched by patch-id, and lists the commits no lane made (conflict resolutions), which the scan, CI and review cover. In git the coordinator stacks the lanes on a branch of their own: `git switch -c int/<run> <lane a tip>`, then `git cherry-pick <base>..lane/<run>-b` (or a merge), then `pipeline integrate --run R --tip HEAD`.
 
 ### Report and stage
 
@@ -131,6 +133,8 @@ Errors, which always refuse:
 - a private key, a GitHub, Slack, AWS or API token, a Slack webhook
 - an em dash in added content, when `scan.emDashInContent` is `error`.
 
+In git the scan reads each commit as git's plumbing shows it under fixed settings, so no config, attribute or clone changes what it sees: a `-diff` file is scanned, as jj shows it. A merge of more than two parents is refused in git, since git cannot diff it in full: rebuild it as two-parent merges. A real binary file (a NUL byte in its first 8000 bytes) shows as "Binary files differ" in both backends, and the scan does not read its content.
+
 Findings to look at, which pass only with `--ack`:
 
 - a URL to a host not in `scan.allowedUrlHosts`
@@ -144,12 +148,18 @@ Files matching `scan.exclude` (images, lockfiles) are skipped. Each scan records
 
 ## push
 
-The gate checks every `jj git push` and `git push` in plain form (see [integration.md](integration.md)), and resolves every ref the push would move. `pipeline push --run R --bookmark B` runs the same check and prints the commands.
+The gate checks every `jj git push` and `git push` in plain form (see [integration.md](integration.md)), and resolves every ref the push would move. `pipeline push --run R --branch B` (`--bookmark` is the same) runs the same check and prints the commands: a bookmark set and a `jj git push` in jj, `git push origin <full id>:refs/heads/<branch>` in git.
 
 What a push is checked against comes from the remote itself: one `git ls-remote` of the address the push really reaches, after `pushurl`, `insteadOf` and `pushInsteadOf`. A push address that reaches another repository than the fetch address is refused. jj's and git's record of the remote's branches must match the remote, or the gate says to fetch first. Every range starts at the trunk commit the remote reports, and a commit counts as published only when a branch the remote reports reaches it. The config the gate uses is the one committed at that trunk commit. While a jj alias in any config scope redefines a revset function, a template keyword or a symbol shaped like a commit or change id that the gate's reads use, or the repository's own jj or git config sets a program, a URL rewrite or a signing program, the gate refuses to act.
 
 - jj: each bookmark given by exact name (`-b`, `--named NAME=REV`), each bookmark on the commits of `-r`, the name `-c` would create, and each bookmark `--all`, `--tracked` or `--deleted` would move. A pattern, a tag, an option the gate does not know, `--at-op`, `--ignore-working-copy`, `--config` in any form, or a push that names no bookmark is refused. `--tracked` and `--all` are refused when a tag would move with them. A commit that is a working copy, or sits under one, is refused before anything else, since jj would snapshot edits on disk into it. A bookmark already where the remote has it is then not counted. Only jj's built-in commands run: a short name (`st`, `b`) that config redefines is refused.
 - git: the remote and each refspec, written out. Force in any spelling (`-f`, `--force-with-lease`, `+ref`, `--mirror`), `--no-verify`, `--all`, `--branches`, `--tags`, `--prune`, `--follow-tags`, `push.followTags`, `--receive-pack`, `--exec`, a submodule push, a pattern, a ref outside `refs/heads/`, `-c` and `--git-dir` are refused. Every option is spelled out in full, since git would take a prefix. A short destination that names a tag on the remote (`git push origin :v1`, `--delete origin v1`) or starts with `heads/`, `tags/` or `remotes/` is refused, and so is a source with no destination that is not a local branch. A refspec with no destination is refused while `remote.<name>.push` is set in any scope, or `push.default` is `upstream`, since git would map it elsewhere, and a repository whose own config sets `remote.<name>.push` refuses every action. A push from a folder where git finds no repository (a jj-only lane workspace) is refused. Only git's built-in commands run, never an alias. `git update-ref` of a remote-tracking or replace ref, and a fetch refspec that writes another remote's refs, are refused.
+- git in a plain git repository, where the gate reads names the way `git push` does, which differs from `git rev-parse`:
+  - Every destination is written in full, `refs/heads/<branch>`, deletions included (`--delete refs/heads/ci/x`), since git maps a short one through the remote's refs or the source's own kind.
+  - A source is matched against local refs first, by git's own rules. Two matches, a match outside `refs/heads/` (a tag, a tracking ref) and a full id that a ref is named after are refused. Only when no ref matches is it an object name, and then it must be a full 40-digit commit id.
+  - `HEAD` is the worktree's HEAD only while no ref named `HEAD` exists where git push looks (`refs/heads/HEAD`, `refs/tags/HEAD` and the like). An agent cannot make one: `git update-ref` or `git symbolic-ref` of a ref named `HEAD`, of a ref outside `refs/`, or with `--stdin` is refused.
+  - A push from a worktree of another repository is refused, by comparing git's common folders, so a linked worktree pushes as its own repository.
+  - `jj git push` is refused there, and so is a jj bookmark set on a line that acts on the git repository: nothing in plain git reads a bookmark.
 - Only `remote`, never another remote.
 - Only `push.branches` (`ci/*` by default).
 - Never a force push: a push that would move a remote branch to a commit its old commit is not an ancestor of is refused, and the refusal names the next free branch name (`pipeline push --next-name`).
@@ -158,11 +168,11 @@ What a push is checked against comes from the remote itself: one `git ls-remote`
 - A deletion is allowed for `push.branches` only, never for trunk.
 - Trunk moves only as a deploy step. Under `deploy.runBy: "user"` an agent never moves it. Under `"agent"` the push must fast-forward trunk and pass the deploy check on the commit.
 
-A bookmark set just before the push (`jj bookmark set ci/x -r <commit id> && jj git push --bookmark ci/x`) is checked at the commit it sets. Only `&&` joins them, so when the set fails the push does not run. Anything else before a push on the same line (a commit, a describe, a fetch) is refused: run it on its own first.
+In jj, a bookmark set just before the push (`jj bookmark set ci/x -r <commit id> && jj git push --bookmark ci/x`) is checked at the commit it sets. Only `&&` joins them, so when the set fails the push does not run. Anything else before a push on the same line (a commit, a describe, a fetch) is refused: run it on its own first.
 
 After a push, the PostToolUse hook records the run's tip as pushed, with the branches that carry it, and mirrors the run's statuses. It skips runs whose cleanup passed and abandoned runs.
 
-The git pre-push hook runs the same check for a plain `git push`. The URL git pushes to must reach the repository the gate reads, and the remote commit git reports for each branch must be the one the remote reported to the gate.
+The git pre-push hook runs the same check for a plain `git push`, from any worktree, scripts included. The URL git pushes to must reach the repository the gate reads, and the remote commit git reports for each branch must be the one the remote reported to the gate. In plain git it runs for the user's own pushes too: the user's push carries `PIPELINE_USER_PUSH=1`, which skips the rules for agents, and a push to trunk is still a deploy step (see deploy and [integration.md](integration.md#10-jj-and-plain-git)).
 
 ## ci
 
@@ -174,6 +184,7 @@ It needs `ci.workflow` set, the scan passed and the commit on the remote. A run 
 
 `pipeline review status --run R` computes coverage of trunk to the tip by patch-id, the way agent-review does: a commit passes when a review reached consensus on its patch-id, or the user's skip covers it. A commit with an empty diff needs no review.
 
+- **In a plain git repository** `auto` means the builtin provider, and `agent-review` is refused, since agent-review reads jj repositories only. The gate refuses a line its checks would skip under a provider it cannot use.
 - **With agent-review** (`review.provider` `auto` finds it), the pipeline only reads its ledger. agent-review sets its own `agent-review` status, so the pipeline sets no `pipeline/review` status.
 - **Without it**, `pipeline review start|round|done|skip` keeps a builtin ledger in the same format, writes the review folder with round 1's request (the user's words filled in), and sets `pipeline/review`. `done` needs at least `review.minReviewers` replies saved in the round's `replies/` folder. `skip` needs the user's words.
 - **Across machines**, `review.trustGithubStatus` also counts a success status from `agent-review` or `pipeline/review` on the tip, as consensus for the whole range up to it: a range attestation from a trusted writer. Only the newest status of each context counts, and only when a trusted writer set it (`review.trustedStatusWriters`, by default the repository's owner). The gate refuses an agent's `gh api` write of a `pipeline/*` or `agent-review` status, a status field read from a file included.
@@ -184,7 +195,7 @@ With the builtin provider, the gate also refuses a pull request created ready (`
 
 ## rebase
 
-`pipeline rebase --run R --tip REV`, after rebasing onto main: lists the commits that keep their patch-id, those whose diff changed, and those that now lack review consensus. It moves the run's tip, so every stage recorded on the old tip (scan, push, CI, review, docs) goes `stale`. Lane commits are matched to the new ids by patch-id. The build carries over when every diff kept its patch-id and every lane commit is in the new range, and goes `stale` otherwise. It names the review round to run when coverage was lost.
+`pipeline rebase --run R --tip REV`, after rebasing onto main: lists the commits that keep their patch-id, those whose diff changed, and those that now lack review consensus. It moves the run's tip, so every stage recorded on the old tip (scan, push, CI, review, docs) goes `stale`. Lane commits are matched to the new ids by patch-id, and in jj by change id first. A commit whose diff changed carries none of its evidence. git has no change ids, so in git a lane commit whose diff changed is marked lost, the lane keeps its old tip, and the build needs `pipeline commits` again. In git the rebase is `git fetch --prune origin && git rebase --onto origin/main <old base> <branch>`, then `pipeline rebase --tip <id>`. The build carries over when every diff kept its patch-id and every lane commit is in the new range, and goes `stale` otherwise. It names the review round to run when coverage was lost.
 
 ## deploy
 
@@ -197,7 +208,9 @@ With the builtin provider, the gate also refuses a pull request created ready (`
 - every commit is in a passed scan
 - the docs rules hold for the range (see docs).
 
-It prints `deploy.command` filled in. The gate knows the deploy script by its real path and its content, as `deploy.command` named it, so a link or a copy of the script is the same script, run from any folder, and a wrapper or another program it is passed to is refused. Pointing `deploy.command` elsewhere does not free a script it named before. `deploy.match` applies only inside the repository's own folders. A script two repositories name is refused, whichever is registered first. With `deploy.runBy: "user"` it says to give the user the command, and the gate refuses the deploy script, every workflow not on `deploy.allowedWorkflows`, and every move of trunk (a push, `gh pr merge` into trunk) for agents. With `"agent"`, the gate runs the deploy check on the commit the script deploys (`deploy.tipArg`) or a deploy workflow's `--ref` names on the remote, and refuses a commit that is a working copy. A workflow is resolved to one file and id, the way gh resolves its argument (an id, a file, or a display name only one workflow has). It is a production deploy when its path, its name, an `environment:` its file names on trunk, or an input matches `deploy.prodPattern`, and that is always refused. A rerun of a deploy workflow is refused too, since its inputs are not visible to the gate.
+It prints `deploy.command` filled in. The gate knows the deploy script by its real path and its content, as `deploy.command` named it, so a link or a copy of the script is the same script, run from any folder, and a wrapper or another program it is passed to is refused. Pointing `deploy.command` elsewhere does not free a script it named before. `deploy.match` applies only inside the repository's own folders. A script two repositories name is refused, whichever is registered first. With `deploy.runBy: "user"` it says to give the user the command, and the gate refuses the deploy script, every workflow not on `deploy.allowedWorkflows`, and every move of trunk (a push, `gh pr merge` into trunk) for agents. With `"agent"`, the gate runs the deploy check on the commit the script deploys (`deploy.tipArg`) or a deploy workflow's `--ref` names on the remote, and refuses a commit that is a working copy. In git a deploy script run outside every worktree has no HEAD of its own, so its revision must be a full commit id or a full ref name (`refs/heads/main`, `refs/tags/v1`, `refs/remotes/origin/main`) that is not symbolic, with only `~n` and `^n` after it: a short name can mean a root ref the gate cannot see. When two registered clones could be the one it acts on, only a full commit id passes.
+
+In plain git, `pipeline deploy check` also prints how trunk moves: `git push origin <full id>:refs/heads/main` for an agent under `"agent"`, and `PIPELINE_USER_PUSH=1 git push origin <full id>:refs/heads/main` for the user under `"user"`, which the pre-push hook lets through only for a fast-forward to a commit this check passes. A workflow is resolved to one file and id, the way gh resolves its argument (an id, a file, or a display name only one workflow has). It is a production deploy when its path, its name, an `environment:` its file names on trunk, or an input matches `deploy.prodPattern`, and that is always refused. A rerun of a deploy workflow is refused too, since its inputs are not visible to the gate.
 
 A run fixing a live hole deploys from the local commit, and its commits reach the public remote only after the deploy passes: [the example deploy script](../profiles/raccoon-vtt/deploy.example.sh) asks `pipeline deploy check` first, deploys the exact local commit, checks the server, and only then pushes main.
 
@@ -210,8 +223,8 @@ A run fixing a live hole deploys from the local commit, and its commits reach th
 `pipeline cleanup --run R` needs the deploy passed and lists what is left, with the commands to fix each:
 
 - every branch the run pushed that is merged but still on the remote (merged means its tip is in trunk, or every commit it adds has the patch-id of a commit trunk gained since it forked)
-- lane workspaces still in jj's list, and their folders
-- a stale main workspace (`jj workspace update-stale`)
+- lane workspaces still in jj's list, or lane worktrees still in git's list (`git worktree remove`, or `git worktree prune` when the folder is gone), their folders, and in git each lane's branch (`git branch -D lane/<run>-<lane>`)
+- in jj, a stale main workspace (`jj workspace update-stale`)
 - scratch databases still listed by `cleanup.databaseList`
 - review folders not archived (moved to `cleanup.archiveDir`)
 - the deploy notification, when `notify.command` is set.
@@ -221,6 +234,15 @@ It passes when nothing is left, and releases the run's lanes, so their files can
 ## abandon
 
 `pipeline abandon --run R --reason "<the user's words>" --by WHO` stops a run for good. It records who decided and why, releases the run's lanes, and prints the cleanup commands for its branches, workspaces and databases. The run never deploys, and `pipeline status` lists it only with `--all`. A run fixing a live hole keeps its commits off the public remote, since stopping the work does not close the hole. Work picked up again starts a new run.
+
+## live-hole
+
+A run marked `--live-hole` stays off a public remote until its deploy passes. Two decisions end or loosen that, and both are the user's. They record who decided and why in the run's events, and keep every commit id, patch id and tip the run knows. The gate refuses both from agents: give the user the command.
+
+- `pipeline live-hole close --run R --by WHO --reason "<the user's words>"`: the hole is no longer live (fixed another way, or it never reached the server), so the run's embargo ends.
+- `pipeline live-hole waive --run R --by WHO --reason "<the user's words>"`: commits recorded before git ids existed that no clone can read any more stop refusing. The embargo stays in force for everything else the run knows. A reason that only says "unrecoverable" is refused.
+
+A run recorded before git ids existed holds only jj's ids. Any pipeline command in its own repository adds the git ids from the objects it holds, so a plain git clone can match them. Until then, a clone that lacks one of its commits refuses every push, merge into trunk and trunk move: run `pipeline status --run R` once in the repository that recorded it.
 
 ## live-play
 

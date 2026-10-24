@@ -11,7 +11,7 @@ The process has two halves. The judgment half is people and agents deciding thin
 - **The user** owns the product. The user's words start every piece of work, and the user's say is final on product behavior, on skipping a review and on production deploys.
 - **The coordinator** is the agent the user talks to. It plans, writes briefs, launches the other agents, verifies what they report, decides the questions the user has delegated, integrates their commits and deploys. It is the implementation owner in every review and the last party to consensus.
 - **Designers** write design notes.
-- **Builders** each own one lane: a set of files, one jj workspace, one brief.
+- **Builders** each own one lane: a set of files, one jj workspace or git worktree, one brief.
 - **Reviewers** are independent and read-only. At least one is a Claude model and at least one a Codex model, so no single model's blind spots decide.
 - **Live play agents** exercise a running copy of the deployed build the way its real users or clients would, and fix what breaks ([live play](#13-live-play)).
 
@@ -61,7 +61,7 @@ Every product question the user did not settle gets an ID and an entry in the de
 
 The coordinator splits the work into lanes. Each lane gets:
 
-- **its own jj workspace**, named `<repo>-<task>` beside the main one, started from the newest stacked tip rather than from main
+- **its own jj workspace or git worktree**, named `<repo>-<task>` beside the main one, started from the newest stacked tip rather than from main. In git the worktree is on a branch of its own (`git worktree add -b lane/<run>-<lane> ../<repo>-<task> <base id>`), never trunk or a `ci/*` branch
 - **a set of files it owns**, which no other open lane owns
 - **a brief** that points at the shared preamble (the rules every agent follows), quotes the user's words, names the design sections or items, the base commit, the ports and databases it may use, the checks to run, and what to report.
 
@@ -94,7 +94,7 @@ A fix for a hole that is live in the deployed build is never pushed to a public 
 
 ### 7. Push
 
-Agents push only to `ci/*` branches, and only commits a passed scan covered. They never force push. jj moves a bookmark "sideways" without a flag when the commits under it were rewritten, and that is a force push too. So before every push the remote branch's commit must be an ancestor of the new tip. When it is not, the stack goes to a new name (`ci/x-2`), and the old local bookmark is forgotten. The old branch is deleted once its work is in main.
+Agents push only to `ci/*` branches, and only commits a passed scan covered. They never force push. jj moves a bookmark "sideways" without a flag when the commits under it were rewritten, and that is a force push too. So before every push the remote branch's commit must be an ancestor of the new tip. When it is not, the stack goes to a new name (`ci/x-2`), and in jj the old local bookmark is forgotten. In git a push names the commit by its full id and the branch in full (`git push origin <full id>:refs/heads/ci/x`). The old branch is deleted once its work is in main.
 
 ### 8. CI
 
@@ -128,7 +128,7 @@ The project's own checks then show that the deployed build works, and their resu
 
 ### 12. Cleanup
 
-After each deploy: merged `ci/*` branches are deleted (a branch whose commits all landed under new IDs after a rebase counts as merged), lane workspaces are forgotten and their folders removed, `jj workspace update-stale` runs in the main workspace, scratch databases (where the project uses them) are dropped, and the review folder is archived.
+After each deploy: merged `ci/*` branches are deleted (a branch whose commits all landed under new IDs after a rebase counts as merged), lane workspaces are forgotten and their folders removed (in git, `git worktree remove <folder>` and `git branch -D lane/<run>-<lane>`), `jj workspace update-stale` runs in a jj repository's main workspace, scratch databases (where the project uses them) are dropped, and the review folder is archived.
 
 Work the user drops is abandoned instead (`pipeline abandon`), with who decided and why. Its lanes give up their files, and it never deploys.
 

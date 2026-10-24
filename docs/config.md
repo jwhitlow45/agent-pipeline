@@ -2,7 +2,7 @@
 
 A project declares its pipeline in `pipeline.config.json` at the repository root, committed. `pipeline.local.json` beside it is gitignored and holds what must never be committed: private values and paths. Both merge over the defaults below, and the local file wins for every key except the gate's own. `pipeline config` prints the merged result, and `pipeline config --check` its warnings.
 
-The gate's own keys come only from `pipeline.config.json` as committed at the trunk commit the remote itself reports, never from jj's `trunk()` or a local ref: `trunk`, `remote`, `push.*`, `ci.workflow`, `review.provider`, `review.trustGithubStatus`, `review.trustedStatusWriters`, `deploy.runBy`, `deploy.match`, `deploy.tipArg`, `deploy.prodPattern`, `deploy.deployWorkflows`, `deploy.allowedWorkflows` and `github.allowedMutations`. An agent can edit its working copy, but not the remote trunk without passing the gate, so a working-copy edit never loosens the gate. `pipeline.local.json` may not set them at all. A change to one takes effect once it reaches trunk, and `config --check` names each key whose working-copy value differs. A repository whose trunk has no committed config is not gated, unless this machine has registered it with the pipeline: then the gate refuses until the config is back on trunk.
+The gate's own keys come only from `pipeline.config.json` as committed at the trunk commit the remote itself reports, never from a local ref or jj's `trunk()`: `trunk`, `remote`, `push.*`, `ci.workflow`, `review.provider`, `review.trustGithubStatus`, `review.trustedStatusWriters`, `deploy.runBy`, `deploy.match`, `deploy.tipArg`, `deploy.prodPattern`, `deploy.deployWorkflows`, `deploy.allowedWorkflows` and `github.allowedMutations`. An agent can edit its working copy, but not the remote trunk without passing the gate, so a working-copy edit never loosens the gate. `pipeline.local.json` may not set them at all. A change to one takes effect once it reaches trunk, and `config --check` names each key whose working-copy value differs. A repository whose trunk has no committed config is not gated, unless this machine has registered it with the pipeline: then the gate refuses until the config is back on trunk.
 
 An unknown key is refused, so a typo never turns a check off. A value of the wrong type is refused too. A value in angle brackets, such as `<private-domain>`, is a placeholder: it is never scanned for, and `config --check` reports it.
 
@@ -13,7 +13,7 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 | Key | Default | Meaning |
 |---|---|---|
 | `project` | `null` | A name, for messages. |
-| `trunk` | `"main"` | The branch deploys move. Ranges run from it. |
+| `trunk` | `"main"` | The branch deploys move, by name on the remote. Ranges run from the commit the remote reports for it. |
 | `remote` | `"origin"` | The only remote agents push to. |
 
 ## `intake`, `brief`, `design`, `decisions`
@@ -39,7 +39,7 @@ An unknown key is refused, so a typo never turns a check off. A value of the wro
 | `commits.conventional` | `true` | `type(scope): description`, lowercase after the colon. |
 | `commits.types` | feat, fix, chore, docs, refactor, test, perf, build, ci | |
 | `commits.oneLine` | `true` | No body. |
-| `commits.acceptedSignatures` | `["good"]` | jj's signature status values that count as signed. Add `"unknown"` for keys jj cannot verify locally. |
+| `commits.acceptedSignatures` | `["good"]` | Signature states that count as signed, in jj's words: `good`, `unknown`, `bad`, `expired`, `revoked` and `none`. Add `"unknown"` for keys the machine cannot verify. In git, `%G?` reads as: `G` and `U` good, `E` unknown, `B` bad, `X` and `Y` expired, `R` revoked, and `N` none only for a commit with no signature at all. An SSH signature git cannot check (no `gpg.ssh.allowedSignersFile`) reads unknown, as jj reports one: set that file to verify SSH signatures. |
 | `commits.forbidEmDash` | `true` | |
 | `commits.forbiddenTrailers` | co-authored-by, generated-by, signed-off-by, "generated with", the Anthropic noreply address | Case-insensitive patterns, one per line of the message. |
 

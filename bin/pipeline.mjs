@@ -30,7 +30,7 @@ Plan
   signoff   --run R --stage S --item I --by WHO --note TEXT [--extra]
 
 Build
-  lane      --run R --lane L --workspace DIR --owns GLOBS --brief F [--name WS] [--base REV] [--db NAMES] [--env K=V,...]
+  lane      --run R --lane L --workspace DIR --owns GLOBS --brief F [--name NAME] [--base REV] [--db NAMES] [--env K=V,...]
   commits   --run R --lane L [--tip REV] [--outside "path: reason"]...
   check     --run R --lane L [--e2e FILES|all] [--only NAMES] [--dry-run]
   check     --run R --lane L --record NAME --exit CODE --log F
@@ -42,7 +42,7 @@ Build
 
 Ship
   scan      --run R [--base REV] [--tip REV] [--ack "why each finding is fine"]
-  push      --run R --bookmark B [--tip REV] [--next-name]
+  push      --run R --branch B [--tip REV] [--next-name]  The check and commands for a push (--bookmark is the same)
   ci        --run R [--commit REV] [--wait] [--run-id ID]
   review    status|start|round|done|skip --run R [--topic T] [--tip REV] [--no-commits --dir DIR] [--reviewers "..."] [--reason "user's words"]
   rebase    --run R --tip REV
@@ -75,7 +75,7 @@ Hooks
 Ledger: ${stateDir()}`;
 
 const STRINGS = ['run', 'words', 'words-file', 'kind', 'by', 'from', 'file', 'lane', 'decisions', 'note', 'review-topic', 'review-skip', 'allow-long', 'id', 'chose', 'why', 'rejected', 'title',
-  'stage', 'item', 'workspace', 'name', 'owns', 'brief', 'base', 'db', 'env', 'tip', 'e2e', 'only', 'record', 'exit', 'log', 'commit', 'test', 'cmd', 'manual', 'ack', 'bookmark', 'run-id',
+  'stage', 'item', 'workspace', 'name', 'owns', 'brief', 'base', 'db', 'env', 'tip', 'e2e', 'only', 'record', 'exit', 'log', 'commit', 'test', 'cmd', 'manual', 'ack', 'branch', 'bookmark', 'run-id',
   'topic', 'dir', 'reviewers', 'reason', 'prev', 'shipped', 'backup', 'health', 'load', 'http', 'restarts', 'logs', 'ungated', 'event', 'message', 'prefix', 'deployed', 'severity', 'area',
   'summary', 'status', 'recommend', 'report', 'decision', 'followup', 'source', 'text', 'files', 'ids', 'lanes', 'repo', 'config', 'remote', 'failed', 'url'];
 const BOOLEANS = ['ui', 'no-ui', 'live-hole', 're-review', 'extra', 'dry-run', 'next-name', 'wait', 'no-commits', 'no-notify', 'json', 'all', 'check', 'open', 'apply', 'due', 'help'];

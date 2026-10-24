@@ -64,7 +64,7 @@ In Claude Code:
 /plugin install agent-pipeline@agent-pipeline
 ```
 
-It needs Node 22 or later, jj, git and an authenticated `gh`. It has no dependencies.
+It works in a jj repository (colocated with git or not) and in a plain git repository, from the folder each command runs in. It needs Node 22 or later, git 2.41 or later and an authenticated `gh`, and jj for a jj repository. It has no dependencies.
 
 ## A run, start to finish
 
@@ -73,6 +73,8 @@ pipeline intake --run dark-mode --kind feature --ui --words-file request.txt
 pipeline design --run dark-mode --note docs/design-dark-mode.md --review-topic dark-modedesign
 # design review with no commits, to consensus, then:
 pipeline design --run dark-mode --note docs/design-dark-mode.md
+jj workspace add --name my-app-dark-a ../my-app-dark-a -r <base>        # jj
+git worktree add -b lane/dark-mode-a ../my-app-dark-a <base id>       # plain git
 pipeline lane --run dark-mode --lane a --workspace ../my-app-dark-a --owns 'src/theme/**' --brief briefs/dark-a.md
 pipeline commits --run dark-mode --lane a
 pipeline check --run dark-mode --lane a --e2e settings
@@ -81,7 +83,8 @@ pipeline report --run dark-mode --lane a --file reports/dark-a.md
 pipeline signoff --run dark-mode --stage build --item scope --by coordinator --note "one commit per item"
 pipeline build --run dark-mode --review-topic dark-modebuild
 pipeline scan --run dark-mode
-jj bookmark set ci/dark-mode -r <tip> && jj git push --bookmark ci/dark-mode
+jj bookmark set ci/dark-mode -r <tip> && jj git push --bookmark ci/dark-mode   # jj
+git push origin <full tip id>:refs/heads/ci/dark-mode                          # plain git
 pipeline ci --run dark-mode --wait
 # code review rounds to consensus (agent-review, or pipeline review), then:
 pipeline deploy check --run dark-mode
@@ -98,5 +101,5 @@ pipeline status --run dark-mode
 - `test/`: `npm test` runs every test with `node --test`, against temporary repositories and a stubbed `gh`.
 - `.claude-plugin/`, `hooks/`, `skills/`: the Claude Code plugin and its marketplace.
 - `codex/`: the AGENTS.md section and hooks for Codex.
-- `git-hooks/pre-push`: the push checks for plain `git push`.
+- `git-hooks/pre-push`: the push checks for plain `git push`, in every worktree.
 - `install.sh`, `pipeline.config.example.json`.

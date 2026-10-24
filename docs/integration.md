@@ -1,6 +1,6 @@
 # Using the pipeline on another machine
 
-The pipeline is one CLI (`bin/pipeline`, Node with no dependencies) plus hooks that call it. It needs Node 22 or later, [jj](https://github.com/jj-vcs/jj), git and the GitHub CLI (`gh`, logged in). Projects use jj workspaces, so a project is a jj repository, colocated with git when the git pre-push hook is wanted.
+The pipeline is one CLI (`bin/pipeline`, Node with no dependencies) plus hooks that call it. It needs Node 22 or later, git 2.41 or later and the GitHub CLI (`gh`, logged in), and [jj](https://github.com/jj-vcs/jj) for a jj repository. A project is a jj repository, colocated with git or not, or a plain git repository. Lanes are jj workspaces or git worktrees. [Section 10](#10-jj-and-plain-git) says how each layout is read and what differs.
 
 Nothing here changes a machine until you run it. The repository is private, so the machine needs GitHub access to it: `gh auth login`, then `gh auth setup-git` for HTTPS, or an SSH key in ssh-agent.
 
@@ -16,7 +16,7 @@ pipeline --help
 
 - `--claude`: adds this checkout as a Claude Code marketplace and installs the plugin, when the `claude` CLI is on PATH
 - `--codex`: links the skill into `~/.codex/skills/` and writes `~/.codex/hooks.json`, or prints the entries to merge when that file exists
-- `--project DIR`: writes `DIR/pipeline.config.json` from the example, adds `pipeline.local.json` to its `.gitignore`, and links the git pre-push hook into the folder git runs hooks from (`core.hooksPath` when it is set). It says so when that folder does not exist, or the project has no git repository.
+- `--project DIR`: writes `DIR/pipeline.config.json` from the example, adds `pipeline.local.json` to its `.gitignore`, and links the git pre-push hook into the folder git runs hooks from (`core.hooksPath` when it is set). It says so when that folder does not exist, or the project has no git repository, and it names each worktree that runs hooks from another folder, with the link to make there.
 - `--dry-run`: prints what it would do.
 
 It never overwrites a file or link it did not create, a link to nothing included, and it creates new files and links exclusively.
@@ -48,9 +48,9 @@ Both hooks act only in repositories whose remote trunk has a committed `pipeline
 - **Which lines it gates.** A line that runs or names jj, git, gh or agent-review in any case (`GIT` runs git on macOS), sends curl or wget to GitHub, or runs a deploy script. A word that only appears as text for `echo`, `printf`, `grep` or `man` does not count, unless that output feeds a program or goes into a file on a line that also runs a shell, an interpreter or a script.
 - **The plain form.** A gated line that holds an action (a push, a deploy, a merge, a dispatch, an API write or a review start) passes only as simple commands joined by `&&`, with every word written out. A `cd <folder>` may come first, on its own. A pipe may lead only into `head`, `tail`, `grep`, `wc`, `sort`, `cut`, `tr`, `cat`, `tee <file>`, `jq`, `column`, `uniq` or `nl`. Every read and every sink runs only with options from its exact list, spelled out in full: the list leaves out the options that write a file or run a program (`sort -o`, `git diff --output`, `git grep -O`, `jj diff --tool`), and git and getopt programs take a unique prefix of an option, so a prefix is refused too. The wrappers it reads are `timeout <duration>` and `caffeinate` with only `-d`, `-i`, `-m`, `-s` and `-u`.
 - **Any form without an action.** A gated line with no action, a bookmark set with no push after it included, passes whatever joins its commands: `;`, `||`, `&`, a loop, a subshell, a `cd` anywhere, or a pipe into any program but jj, git, gh, agent-review, pipeline, curl, wget, a shell, an interpreter or a script, which would read input the gate cannot see. A pipe at the end of a line leads into the next command, past any blank or comment lines. A loop, a group or a subshell after a pipe counts as such a program for every command in it, at any depth. A loop or a group may not take its input from a redirection, for the same reason, and a `cd` may not come after a pipe. Each command is still read as it is on a plain line, so a word built at run time, an unknown option or a program the gate cannot find sends the line back to the plain form, which refuses it. The one exception is the folder that git `-C` or jj `-R` takes, which may be one quoted variable: `for d in a b; do git -C "$d" status; done`. jj reads its short names, such as `st`, from its config in that folder, so they need a literal folder: write `jj -R "$w" status`, not `jj -R "$w" st`. When the gate refuses a line of reads for a reason of its own, and it can class every command on the line with no action or bookmark set among them, the refusal names that reason, not the plain form. A line refused for what a pipe feeds keeps the plain form's message.
-- **One action, placed last.** A push, a deploy, a merge, a dispatch, an API write or a review start comes last on its line. Before it only reads, the leading `cd` and `jj bookmark set|create|move NAME -r <commit id>` may run. A bookmark set stands alone between `&&`, never in a pipe, so its failure stops the push, and its revision is read in the workspace it runs in. Run anything else on its own first.
+- **One action, placed last.** A push, a deploy, a merge, a dispatch, an API write or a review start comes last on its line. Before it only reads, the leading `cd` and, in a jj repository, `jj bookmark set|create|move NAME -r <commit id>` may run. In a plain git repository a line that sets a jj bookmark is refused, and a push names its commit by full id: `git push origin <full id>:refs/heads/ci/x`. A bookmark set stands alone between `&&`, never in a pipe, so its failure stops the push, and its revision is read in the workspace it runs in. Run anything else on its own first.
 - **Exact commands.** jj, git and gh are read with their own grammar, flag by flag: an unknown option, an alias, `-c`, `--config`, a shell, an interpreter, any other wrapper or a word built at run time is refused there, and so are `;`, `||` and a subshell on a line that holds an action. The refusal names the plain form to run.
-- **On every line.** A command whose name is built at run time (`$CMD`, `eval "$X"`, `sh -c "$X"`) is refused, and so is a write the line names into a `.git` or `.jj` folder, git's, jj's, gh's, ssh's, curl's or wget's config, a shell startup file, Claude Code's shell snapshots, the hook files, Claude Code's or Codex's settings, or the pipeline's ledger, by a redirection, `tee`, `cp`, `mv`, `ln`, a tool's own output option or another program, or by Edit and Write. A reader may name those files only with options from its list.
+- **On every line.** A command whose name is built at run time (`$CMD`, `eval "$X"`, `sh -c "$X"`) is refused, and so is a write the line names into a `.git` or `.jj` folder, git's, jj's, gh's, ssh's, curl's or wget's config, a shell startup file, Claude Code's shell snapshots, the hook files, Claude Code's or Codex's settings, or the pipeline's ledger, by a redirection, `tee`, `cp`, `mv`, `ln`, a tool's own output option or another program, or by Edit and Write. The git folders of every registered clone count as `.git` folders, a separate git folder or a bare repository included. A reader may name those files only with options from its list. A line that sets `PIPELINE_USER_PUSH`, the marker of the user's own push (section 10), is refused.
 
 The gate does not read PowerShell: a PowerShell command that names jj, git, gh, agent-review or a deploy is refused, with the advice to run it through Bash. So is one that names a registered deploy script under any name, and, while deploy scripts are registered, one that runs a command PowerShell builds (`& $script`, `Invoke-Expression`, `Start-Process`).
 
@@ -75,12 +75,12 @@ The gate blocks with exit code 2 and its reason on stderr. Any failure while it 
 - **Skill:** `install.sh --codex` links `skills/agent-pipeline` into `~/.codex/skills/`.
 - **Hooks:** Codex reads Claude-style hooks from `~/.codex/hooks.json` or a project's `.codex/hooks.json`. [codex/hooks.json](../codex/hooks.json) is the template, with `PIPELINE_BIN` standing for the CLI's path (`install.sh --codex` fills it in, shell-quoted). Codex asks you to trust a new hook the first time it runs. Codex names its shell tool `Bash` in hook input, and the matcher also names the older shell tool names. Codex's managed hooks do not block a call when the hook itself fails or times out, so the gate's own 60-second deadline is what keeps a slow check from letting a command through. A crash of the hook process still lets it run there.
 - **A persistent shell:** a Codex shell session keeps variables, functions and aliases between calls. The gate reads each call on its own and never sees them, so a function defined in one call can run a push in the next. See [what the gate does not reach](#what-it-does-not-reach).
-- **Without hooks:** run every push, deploy and review command through the gate: `pipeline exec -- jj git push --bookmark ci/x`. `exec` runs the gate, then the command, then the mirror.
+- **Without hooks:** run every push, deploy and review command through the gate: `pipeline exec -- jj git push --bookmark ci/x`, or in git `pipeline exec -- git push origin <full id>:refs/heads/ci/x`. `exec` runs the gate, then the command, then the mirror.
 
 ## 4. Any other agent, or a person
 
 - `pipeline exec -- <command>` gives the gate and the mirror without hooks.
-- `git-hooks/pre-push` runs the push checks for `git push` in a colocated repository: `ln -s ~/src/agent-pipeline/git-hooks/pre-push .git/hooks/pre-push`. git hands it the URL it pushes to and each branch's commit on the remote. It refuses a URL that is not the repository the gate reads, and a remote commit that differs from what the remote itself reported to the gate. jj does not run git hooks, so a `jj git push` is checked only by the agent hooks or by `exec`.
+- `git-hooks/pre-push` runs the push checks for `git push` in a plain git repository or a colocated jj repository, from every worktree: `ln -s ~/src/agent-pipeline/git-hooks/pre-push .git/hooks/pre-push`, or where `core.hooksPath` points. git hands it the URL it pushes to and each branch's commit on the remote. It refuses a URL that is not the repository the gate reads, and a remote commit that differs from what the remote itself reported to the gate. In plain git it is the backstop for every push that does not pass `--no-verify`, scripts included, and the user's own push carries `PIPELINE_USER_PUSH=1` ([section 10](#10-jj-and-plain-git)). jj does not run git hooks, so a `jj git push` is checked only by the agent hooks or by `exec`.
 
 ## 5. Set up a project
 
@@ -90,7 +90,7 @@ pipeline init
 pipeline config --check
 ```
 
-Then fill in `pipeline.config.json` ([config.md](config.md)), commit it, and get it onto the remote trunk. The gate reads its own keys (push, CI, review trust and deploy) only from the copy committed on the remote trunk, so a repository stays ungated until that copy exists, and `pipeline config --check` says so. Put private values and paths in `pipeline.local.json`, which `init` adds to `.gitignore`: the live domain and the deploy host the scan keeps out, any other string that must never reach a public branch. A lane's workspace finds the local file in the main workspace, so it needs no copy.
+Then fill in `pipeline.config.json` ([config.md](config.md)), commit it, and get it onto the remote trunk. The gate reads its own keys (push, CI, review trust and deploy) only from the copy committed on the remote trunk, so a repository stays ungated until that copy exists, and `pipeline config --check` says so. Put private values and paths in `pipeline.local.json`, which `init` adds to `.gitignore`: the live domain and the deploy host the scan keeps out, any other string that must never reach a public branch. A lane's workspace finds the local file in the main workspace, or for a bare repository's worktrees in the bare folder, so it needs no copy.
 
 Declare every deploy workflow. `deploy.deployWorkflows` is a regex over a workflow's file path and display name, and defaults to `deploy`. A workflow that deploys under another name (`cd.yml`, `release.yml`) is a deploy to the gate only when its file names an `environment:`, so give it a matching name or an environment. A workflow whose path, name, environment or inputs match `deploy.prodPattern` is a production deploy, which agents never run. The gate reads the workflow file GitHub will run: as committed on the `--ref` branch (or the default branch without one), or at a rerun's own commit, and as committed on trunk, with every local workflow it calls (`uses: ./.github/workflows/x.yml`). It reads `environment:` as a name or as a mapping with `name:`, keys in any order. It refuses an environment it cannot read: one named by an expression (`${{ inputs.target }}`), an anchor or alias, or another YAML form, and a call to a workflow in another repository. Name each environment plainly, so the gate can tell where a workflow deploys. Under `deploy.runBy: "user"`, agents may dispatch or rerun only the workflows listed in `deploy.allowedWorkflows`, by file path, and the list is empty by default.
 
@@ -124,7 +124,7 @@ It is not a security boundary. It does not try to stop an agent that is working 
 
 ### What it checks an action against
 
-A read the gate needs either answers, proves the thing absent, or refuses: a workflow file it cannot parse the way GitHub would, a protection rule it cannot read, a remote it cannot list, or a git clone jj does not know. It checks each action against the remote itself: one `git ls-remote` of the address a push really reaches, after `pushurl`, `insteadOf` and `pushInsteadOf`, and the config committed at the trunk commit the remote reports. jj's and git's record of the remote must agree with it, or the gate says to fetch first. It refuses to act while a jj alias redefines a function, keyword or id the gate's reads use.
+A read the gate needs either answers, proves the thing absent, or refuses: a workflow file it cannot parse the way GitHub would, a protection rule it cannot read, a remote it cannot list, or a git folder outside every worktree of a repository with the pipeline. It checks each action against the remote itself: one `git ls-remote` of the address a push really reaches, after `pushurl`, `insteadOf` and `pushInsteadOf`, and the config committed at the trunk commit the remote reports. jj's and git's record of the remote must agree with it, or the gate says to fetch first. It refuses to act while a jj alias redefines a function, keyword or id the gate's reads use.
 
 The gate's own reads (jj, git and gh, to read config and the remote) run in the hook's environment, not in the agent's shell. A variable, function or alias that the agent's shell gets from a startup file is invisible to them. The gate refuses writes to the startup files, Claude Code's shell snapshots, and the config files git, jj, gh, ssh, curl and wget read, wherever the environment points them (`JJ_CONFIG` as a list of files and folders, `GH_CONFIG_DIR`, `GIT_CONFIG_GLOBAL`, `XDG_CONFIG_HOME`, `CURL_HOME`, `WGETRC`), so what it reads and what the agent's command runs start from the same files. It reads those locations from the environment rather than asking each tool, which would start jj and git on every command. A variable the agent sets in a persistent shell is outside that.
 
@@ -151,6 +151,12 @@ The gate reads only the line it is given, as text. These are outside it:
 - the shell around the line: the gate takes the PATH, HOME and CDPATH the hook runs with as the agent's shell's own, and does not see a login shell's startup files or what a persistent shell kept from an earlier call
 - a deploy that a workflow starts on its own trigger, such as a push, a comment or a label, which the gate never sees as a deploy
 
+It also has known limits, as a guardrail does:
+
+- It knows the pipeline's own commands by the name `pipeline`. Run another way, through a link to `bin/pipeline` or `bin/pipeline.mjs`, by its path, or as the script of another interpreter, a pipeline command such as `pipeline live-hole close` is not found.
+- It does not protect `.envrc` or other files a tool loads into later shells.
+- A git checkout nested inside a jj workspace is read as the jj workspace around it, so its pushes are refused as not that repository's. Work in such a checkout from outside the jj workspace. This fails closed: nothing is let through.
+
 The settings in section 8 are what holds there.
 
 ## 8. What GitHub must enforce
@@ -164,9 +170,9 @@ These settings are the boundary the gate relies on. Without them a repository ha
 - **The production environment:** every production deploy workflow runs in an environment whose name matches `deploy.prodPattern`, with the user as a required reviewer and "Prevent self-review" on.
 - **Deploy keys:** a deploy key on an agent's machine is read-only, and every key or credential that reaches production stays off that machine, so the production environment's rules decide each production deploy.
 - **Agent tokens:** write access at most, never admin, on no ruleset's bypass list, without the Administration, Environments or Secrets permissions, and a credential of their own, not the user's.
-- **This machine:** every repository with the pipeline runs its git pre-push hook (`install.sh --project <repo>` links it), the backstop for a `git push` the gate did not see.
+- **This machine:** every repository with the pipeline, and in git every worktree of it, runs its git pre-push hook (`install.sh --project <repo>` links it), the backstop for a `git push` the gate did not see.
 
-`pipeline doctor` reads these settings with `gh api` and the hooks on this machine, and changes nothing. Each line is ok, missing, or unverified: a setting the API cannot show, such as whose credential a token is or who can reach an App's key. It says nothing is missing only when every setting it can read is there, and it lists the unverified ones for the user to confirm. It does not read deploy keys, so the user checks those.
+`pipeline doctor` reads these settings with `gh api` and the hooks on this machine, every git worktree included, and changes nothing. It also names `PIPELINE_USER_PUSH` when it is set where agents run. Each line is ok, missing, or unverified: a setting the API cannot show, such as whose credential a token is or who can reach an App's key. It says nothing is missing only when every setting it can read is there, and it lists the unverified ones for the user to confirm. It does not read deploy keys, so the user checks those.
 
 Each stage is a commit status, so these checks can require them. Each status describes only its own commit: when a run's tip moves, its stages show as `pending` on the new tip until they pass there. Anyone with write access to commit statuses can set any status, which is why each required check names its App. The gate also refuses an agent's `gh api` status write for the `pipeline/*` and `agent-review` contexts, for the CI workflow's name and its jobs, and for any check trunk's rules require.
 
@@ -178,8 +184,76 @@ Two filters stay separate. GitHub's expected source decides which statuses GitHu
 - Check logs: `~/.local/state/agent-pipeline/logs/<run>/<lane>/<tip>/`.
 - The builtin review ledger: `~/.local/state/agent-pipeline/reviews/`.
 - The follow-up backlog: `~/.local/state/agent-pipeline/followups/`, one file per repository.
-- The repositories with a committed config: `~/.local/state/agent-pipeline/repos.json`, which pipeline commands keep current. Each entry holds the repository's jj store, its remote and trunk, its deploy pattern, and every deploy script its `deploy.command` has named, by real path and content hash. The gate binds a deploy script run from any folder to its own repository by these, and refuses a script two repositories share. A registered repository whose committed config disappears from trunk is refused, never left ungated. When the file cannot be read, a deploy script could have any name, so the gate refuses every line that runs a program other than a plain read or one the system ships in `/bin`, `/usr/bin` and the like, and says so. Repair it in a terminal outside the agent, since the gate refuses an agent's write there: delete it, and the next pipeline command in each project writes it again.
+- The repositories with a committed config: `~/.local/state/agent-pipeline/repos.json`, which pipeline commands keep current. Each entry holds every clone of the repository that registered (its store, jj's or git's, its folder, its worktrees and its git folders, which the gate protects), its remote and trunk, its deploy pattern, and every deploy script its `deploy.command` has named, by real path and content hash. The gate binds a deploy script run from any folder to its own repository by these, and refuses a script two repositories share. A registered repository whose committed config disappears from trunk is refused, never left ungated. When the file cannot be read, a deploy script could have any name, so the gate refuses every line that runs a program other than a plain read or one the system ships in `/bin`, `/usr/bin` and the like, and says so. Repair it in a terminal outside the agent, since the gate refuses an agent's write there: delete it, and the next pipeline command in each project writes it again.
 - Each state file is written under a lock beside it (`<file>.lock`), which a process that died leaves behind for the next one to clear.
 - The decision log: wherever `decisions.file` says, outside the repository when the repository is public.
 
 The ledger is per machine, like agent-review's. GitHub statuses are the shared record.
+
+## 10. jj and plain git
+
+Each command finds its backend from the folder it runs in, without running a program. It walks up to the first folder that holds `.jj` or `.git`, and `.jj` wins in a folder that holds both.
+
+| Layout | Backend | Store | `pipeline.local.json` is read from |
+|---|---|---|---|
+| jj, colocated with git or not | jj | `.jj/repo` | the folder that holds `.jj` |
+| a secondary jj workspace | jj | the main workspace's `.jj/repo` | the main workspace |
+| git, the main worktree or a separate git folder | git | its git folder | the worktree |
+| git, a linked worktree | git | the common git folder | the main worktree |
+| a worktree of a bare repository | git | the bare folder | the bare folder |
+| a git worktree of a colocated jj repository | refused | | |
+| a bare repository itself, or no repository | none | | |
+
+A folder in no backend is still checked: a bare clone of a registered repository, or a folder that holds a pipeline config, refuses a push, a merge or a deploy rather than leaving it ungated.
+
+### What a git repository must be
+
+- git 2.41 or later.
+- sha1 commit ids.
+- A full clone: not shallow (`git fetch --unshallow origin`), and not a partial clone.
+- A tracking ref for every branch of the remote: `remote.origin.fetch` must map `refs/heads/*` to `refs/remotes/origin/*`. A single-branch clone and a bare clone have none. Run `git remote set-branches origin '*'`, then `git fetch --prune origin`. Until then the CLI cannot see the config committed on the remote's trunk and says the gate is off, while the gate reads the remote itself and refuses.
+- An empty `info/attributes` in the git folder: move its lines to `.gitattributes`. Also no `merge.text.*`, `merge.binary.*` or `merge.union.*` key in any config scope. Both would change what git shows of a commit, so they are refused in jj repositories too.
+
+### How git is read
+
+Every git read runs with git's environment cleared, except the transport settings a push of the user's own needs too: `GIT_SSH`, `GIT_SSH_COMMAND`, `GIT_SSH_VARIANT`, `GIT_ASKPASS`, `GIT_PROXY_COMMAND`, the `GIT_SSL_*`, `GIT_PROXY_SSL_*` and `GIT_HTTP_*` variables git documents, `GIT_CURL_FTP_NO_EPSV`, `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM`. Every other `GIT_*` variable is cleared, `GIT_DIR`, `GIT_INDEX_FILE` and `GIT_CONFIG` included, and the repository is found again from the folder. Diffs, patch ids and file lists are read with fixed settings and no attributes, so every clone sees the same bytes for the same commit under any config.
+
+### Bare-repository worktrees
+
+Each worktree that runs a pipeline command registers as a worktree of its clone. `pipeline.local.json` lives in the bare folder (`<repo>.git/pipeline.local.json`), which the gate protects, so only the user edits it. `deploy.command` there must be an absolute or `~/` path, since a relative one would depend on the worktree that ran it. A deploy script run from outside every worktree acts on the clone of the worktree it runs in, else the clone whose worktree holds it, else the only clone with a worktree left. When two clones could be the one, the deploy revision must be a full commit id.
+
+### The hook in every worktree
+
+git runs a worktree's pre-push hook from where that worktree's hooks path points. A relative or worktree-scoped `core.hooksPath`, such as husky's `.husky/_`, gives each worktree its own folder, and a push there runs no pipeline hook unless one is linked there too.
+
+- `pipeline doctor` reads every worktree's hook. It is ok when it is the executable file `install.sh` links, missing when there is no file or git skips it, and unverified for any other file, since its text cannot prove it runs the pipeline.
+- `pipeline lane` refuses a worktree whose hook is missing, and warns on an unverified one.
+- With husky, call `<agent-pipeline>/git-hooks/pre-push "$@"` from the tracked `.husky/pre-push`, and confirm doctor's unverified line by hand.
+
+### The user's own push
+
+In plain git the pre-push hook runs for every `git push`, the user's too. Without a mark it would refuse the user what it refuses an agent: a trunk push under `deploy.runBy: "user"`, a branch outside `push.branches`, another remote, an unscanned commit. The user's own push carries `PIPELINE_USER_PUSH=1`, as `pipeline deploy check` prints it for a trunk move:
+
+```sh
+PIPELINE_USER_PUSH=1 git push origin <full id>:refs/heads/main
+```
+
+With the marker, the hook skips the rules for agents. A push to trunk must still fast-forward the trunk the remote reports, and its commit must pass the live-hole embargo and the deploy check. Every other push passes. Only the user sets it, in a terminal outside the agent: the gate refuses a line that sets it, and refuses every push while the gate's own environment holds it, so start agents from a shell without it. `--no-verify` skips the hook entirely. The gate refuses that for agents.
+
+### What differs between the two
+
+- **Change ids.** git has none. In both backends a commit is the same change when it keeps its commit id or a patch id. jj also follows a rebased or amended commit by its change id, which finds it but never carries its evidence over. In git a rebase that changes a lane commit's diff marks the commit lost, and the lane is recorded again with `pipeline commits`.
+- **Review.** agent-review reads jj repositories only. In git, `review.provider` `auto` means the builtin provider, and a committed `agent-review` is refused.
+- **Working copies.** A git commit never takes in edits on disk, so jj's rules about working-copy commits do not apply. Before checks, the clean check reads `git status`, untracked files and submodules included.
+- **Octopus merges.** git cannot diff a merge of more than two parents in full, so a range that holds one is refused in git. Rebuild it as two-parent merges.
+- **Hooks.** `jj git push` runs no git hooks, so the gate and `pipeline exec` check jj pushes. In git the hook checks every push that does not pass `--no-verify`.
+
+| Step | jj | plain git |
+|---|---|---|
+| A lane | `jj workspace add --name <repo>-<task> ../<repo>-<task> -r <base>` | `git worktree add -b lane/<run>-<lane> ../<repo>-<task> <base id>` |
+| Push a branch | `jj bookmark set ci/x -r <id> && jj git push --remote origin --bookmark ci/x` | `git push origin <full id>:refs/heads/ci/x` |
+| The user's trunk move | `jj bookmark set main -r <id> && jj git push --remote origin --bookmark main` | `PIPELINE_USER_PUSH=1 git push origin <full id>:refs/heads/main` |
+| Delete a merged branch | `jj bookmark delete ci/x`, then `jj git push --remote origin --bookmark ci/x` | `git push origin --delete refs/heads/ci/x`, then `git branch -D ci/x` when a local branch exists |
+| Fetch | `jj git fetch --remote origin` | `git fetch --prune origin` |
+| Remove a lane | `jj workspace forget <name>`, then remove its folder | `git worktree remove <folder>`, then `git branch -D lane/<run>-<lane>` |
+| A stale workspace | `jj workspace update-stale` | none |

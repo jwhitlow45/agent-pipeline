@@ -27,7 +27,7 @@ The owner's words (<date>): "<the user's words, verbatim>"
 typecheck, unit and build in parallel (read every log in full), then integration, then e2e one file at a time: <touched files>, <always-run files>. Use <port> only. Stop every browser, server or client an e2e file started before the next one.
 
 ## Workspace
-<workspace path>, an empty working copy on <base>. Databases <names>, dropped at the end. Never push, move bookmarks or send notifications. Asking the owner is off: decide by the note, and report anything it does not settle with your choice.
+<workspace path>: a jj workspace with an empty working copy on <base>, or a git worktree on its own branch <lane/run-lane> at <base>. Databases <names>, dropped at the end. Never push, move bookmarks or other branches, or send notifications. Asking the owner is off: decide by the note, and report anything it does not settle with your choice.
 
 ## Report
 <scratch>/reports/<task>.md, and about 10 lines to the coordinator: change IDs, check results in one line, the randomized test's invariants, anything the note did not settle and what you chose.

@@ -78,7 +78,7 @@ Source: [diagrams/review-loop.excalidraw](diagrams/review-loop.excalidraw).
 
 Source: [diagrams/lanes.excalidraw](diagrams/lanes.excalidraw).
 
-`pipeline lane` refuses a lane whose globs match a file another open lane owns. `pipeline commits` refuses a commit that touches another open lane's file, a new file included, unless the coordinator acknowledges it with `--outside`.
+Each lane's workspace is a jj workspace, or in a plain git repository a git worktree on a branch of its own. `pipeline lane` refuses a lane whose globs match a file another open lane owns. `pipeline commits` refuses a commit that touches another open lane's file, a new file included, unless the coordinator acknowledges it with `--outside`.
 
 ## 5. The hotfix fast lane
 
@@ -106,6 +106,8 @@ Source: [diagrams/live-play.excalidraw](diagrams/live-play.excalidraw).
 </picture>
 
 Source: [diagrams/gate.excalidraw](diagrams/gate.excalidraw).
+
+The bookmark steps are jj's. In a plain git repository a push names its commit by full id and its branch in full (`git push origin <full id>:refs/heads/ci/x`), a line that sets a jj bookmark is refused, and after a refused sideways move the push goes to the new name with no bookmark to forget. [stages.md](stages.md#push) has every rule.
 
 ## 8. A deploy, step by step
 

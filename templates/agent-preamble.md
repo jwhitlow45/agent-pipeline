@@ -23,9 +23,9 @@ You own one slice of the work, given in your brief. Other agents build other sli
 - Use only the ports and databases your brief gives you. Stop every process you started before you finish.
 
 ## Commits
-- Commit with jj in your workspace: `jj commit -m "type(scope): description" <paths>`. Conventional, lowercase after the colon, one line, no body, no trailers. One commit per item or per coherent step.
+- Commit in your workspace: with jj, `jj commit -m "type(scope): description" <paths>`, or in a plain git repository, in your worktree on its lane branch, `git commit -m "type(scope): description" -- <paths>` after `git add <paths>`. Conventional, lowercase after the colon, one line, no body, no trailers. One commit per item or per coherent step.
 - Put feature list and user docs changes in your lane's last commit, never mixed into a code commit.
-- Never push, never move bookmarks, never run git commands that write, never send notifications.
+- Never push, never move bookmarks or branches other than your own lane branch, never run other git commands that write, never send notifications.
 
 ## Questions
 When a real product choice is the owner's, do not stop to ask. Take the sensible default, say so in your report with the options you rejected, and keep working. The coordinator decides and logs it.
