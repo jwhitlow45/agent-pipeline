@@ -1651,6 +1651,14 @@ describe('plain git: pushes and the names git push reads', () => {
     ['ws', 'git push origin lane/demo-dark', 2, NOT_OURS],
     ['ws', 'git push origin %tip%:refs/heads/feature', 2, NOT_OURS],
     ['ws', 'git push origin %tip%:refs/heads/main', 2, /Moving main is a deploy step: No CI result/],
+    // A refusal names plain git's own commands.
+    { name: 'git pushes tags with every push', setup: (b) => b.sh('git config push.followTags true') },
+    ['ws', 'git push origin %tip%:refs/heads/ci/dark', 2, /push\.followTags\)\. Agents push only branches: push with git push origin <full id>:refs\/heads\/<branch>\./],
+    { name: 'and no longer does', setup: (b) => b.sh('git config --unset push.followTags') },
+    { name: 'a pull request whose head this clone lacks', setup: (b) => b.ghScript([workflowsRule(ALL_WORKFLOWS), { match: 'pr view 6 ', stdout: { baseRefName: 'main', headRefName: 'ci/dark', headRefOid: 'a'.repeat(40), isDraft: false } }]) },
+    ['repo', 'gh pr merge 6 --squash', 2, /not in this repository yet\. Run git fetch --prune origin, then check again/],
+    ['repo', `gh api -X PATCH repos/${SLUG}/git/refs/heads/main -f sha=%tip%`, 2, /moves a branch on GitHub without the gate\. Push with git push origin <full id>:refs\/heads\/<branch>\./],
+    ['repo', `gh api -X POST repos/${SLUG}/merges -f base=main -f head=ci/dark`, 2, /merges or renames branches on GitHub, which the gate does not check\. Push with git push origin <full id>:refs\/heads\/<branch> instead/],
     // Every force spelling.
     ['ws', 'git push --force origin %tip%:refs/heads/ci/dark', 2, FORCE],
     ['ws', 'git push -f origin %tip%:refs/heads/ci/dark', 2, FORCE],
