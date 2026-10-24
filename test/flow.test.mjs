@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
+import { forEachBackend } from './backends.mjs';
 import { ALL_WORKFLOWS, baseConfig, builtRun, ciScript, CLI, sandbox, SLUG, WORDS, WORKFLOWS, workflowsRule } from './helpers.mjs';
 
 describe('intake, briefs and design', () => {
@@ -90,8 +91,8 @@ describe('intake, briefs and design', () => {
 });
 
 // PA-49: a note bound to the user's skip could never take a real review of its changed text.
-describe('a design bound to a skip', () => {
-  const box = sandbox({ config: baseConfig });
+forEachBackend('a design bound to a skip', (backend) => {
+  const box = sandbox({ config: baseConfig, backend });
   after(() => box.cleanup());
   const consensus = (topic, rounds, at = '2099-01-01T00:00:00Z') => writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, `${topic}.json`), JSON.stringify({ topic, repo: null, identity: null, folder: join(box.root, `review-${topic}`), status: 'consensus', rounds: Array.from({ length: rounds }, (_, n) => ({ n: n + 1 })), consensus: { tip: null, commits: [], reviewers: 'a, b', rounds, at } }));
 
@@ -143,8 +144,8 @@ describe('a design bound to a skip', () => {
   });
 });
 
-describe('build lanes', () => {
-  const box = sandbox({ config: { ...baseConfig, fastLane: { maxFiles: 3 } } });
+forEachBackend('build lanes', (backend) => {
+  const box = sandbox({ config: { ...baseConfig, fastLane: { maxFiles: 3 } }, backend });
   after(() => box.cleanup());
   let ws;
 
@@ -152,17 +153,16 @@ describe('build lanes', () => {
     box.cli(['intake', '--run', 'one', '--kind', 'fast', '--words', WORDS]);
     box.write('../spec.md', WORDS);
     box.cli(['spec', '--run', 'one', '--file', '../spec.md']);
-    box.commit('chore: add sources', { 'src/a.mjs': 'a\n', 'src/b.mjs': 'b\n' });
-    box.sh('jj bookmark set main -r @- && jj git push --bookmark main');
-    ws = join(box.root, 'demo-one');
-    box.sh('jj workspace add --name demo-one ../demo-one -r main');
-    assert.match(box.cli(['lane', '--run', 'one', '--lane', 'a', '--workspace', join(box.root, 'nowhere'), '--owns', 'src/**']).err, /not the root of a jj workspace/);
+    box.setBranch('main', box.commit('chore: add sources', { 'src/a.mjs': 'a\n', 'src/b.mjs': 'b\n' }));
+    box.pushRaw('main');
+    ws = box.addLane('demo-one');
+    assert.match(box.cli(['lane', '--run', 'one', '--lane', 'a', '--workspace', join(box.root, 'nowhere'), '--owns', 'src/**']).err, /is not the root of a /);
     assert.equal(box.cli(['lane', '--run', 'one', '--lane', 'a', '--workspace', ws, '--owns', 'src/a.mjs,FEATURES.md']).code, 0);
     box.cli(['intake', '--run', 'two', '--kind', 'fast', '--words', WORDS]);
     box.cli(['spec', '--run', 'two', '--file', '../spec.md']);
     const sameFolder = box.cli(['lane', '--run', 'two', '--lane', 'b', '--workspace', ws, '--owns', 'src/b.mjs']);
     assert.match(sameFolder.err, /already builds in/);
-    box.sh('jj workspace add --name demo-two ../demo-two -r main');
+    box.addLane('demo-two');
     const overlap = box.cli(['lane', '--run', 'two', '--lane', 'b', '--workspace', join(box.root, 'demo-two'), '--owns', 'src/**']);
     assert.match(overlap.err, /Lane one\/a already owns src\/a.mjs/);
     assert.equal(box.cli(['lane', '--run', 'two', '--lane', 'b', '--workspace', join(box.root, 'demo-two'), '--owns', 'src/b.mjs']).code, 0);
@@ -181,7 +181,7 @@ describe('build lanes', () => {
   });
 
   test('the fast lane refuses a change across too many files', () => {
-    box.sh('jj abandon @-', ws);
+    box.drop(ws);
     box.commit('fix(ui): many files', { 'src/a.mjs': 'a3\n' }, ws);
     box.commit('docs: the feature list', { 'FEATURES.md': 'y\n' }, ws);
     const ok = box.cli(['commits', '--run', 'one', '--lane', 'a'], { cwd: ws });
@@ -194,11 +194,11 @@ describe('build lanes', () => {
   });
 
   test('checks refuse a dirty workspace and record each result in order', () => {
-    box.sh('jj abandon @-', ws);
+    box.drop(ws);
     box.cli(['commits', '--run', 'one', '--lane', 'a'], { cwd: ws });
     box.write('src/a.mjs', 'uncommitted\n', ws);
     assert.match(box.cli(['check', '--run', 'one', '--lane', 'a'], { cwd: ws }).err, /uncommitted changes/);
-    box.sh('jj restore', ws);
+    box.restore(ws);
     const run = box.cli(['check', '--run', 'one', '--lane', 'a'], { cwd: ws });
     assert.equal(run.code, 0, run.all);
     assert.match(run.out, /ok {3}unit: exit 0, pass 3, fail 0/);
@@ -255,6 +255,42 @@ describe('build lanes', () => {
     assert.match(blocked.err, /build has not passed/);
     assert.equal(box.gate('agent-review start --topic unrelated').code, 0);
   });
+});
+
+// The flow on every backend as far as the push, which the next suite takes on in jj.
+forEachBackend('a built run is scanned before it is pushed', (backend) => {
+  const box = sandbox({ config: baseConfig, backend });
+  after(() => box.cleanup());
+
+  test('builds, checks, mutation checks and scans the run\'s commits', () => {
+    const { ws, tip } = builtRun(box);
+    const run = box.run('dark');
+    assert.equal(run.stages.build.state, 'passed');
+    assert.equal(run.lanes.a.commits.length, 2);
+    assert.ok(run.lanes.a.commits.every((commit) => commit.patchIds.length > 0));
+    assert.equal(run.lanes.a.mutations.length, 1);
+    const scanned = box.cli(['scan', '--run', 'dark'], { cwd: ws });
+    assert.equal(scanned.code, 0, scanned.all);
+    const scan = box.run('dark').scans.at(-1);
+    assert.equal(scan.passed, true);
+    assert.equal(scan.tip, tip);
+    assert.equal(scan.commits.length, 2);
+    // A private string in a commit is refused in every backend.
+    box.commit('feat: a key', { 'src/key.mjs': `export const key = '${'AKIA'}ABCDEFGHIJKLMNOP';\n` }, ws);
+    const refused = box.cli(['scan', '--run', 'dark', '--tip', box.head(ws)], { cwd: ws });
+    assert.equal(refused.code, 1);
+    assert.match(refused.out, /AWS key/);
+  });
+
+  // The gate reads plain git in the next step. Until then a push from a git clone of a pipeline
+  // repository is refused, never let through unchecked.
+  if (backend === 'git') {
+    test('the gate still refuses a push from plain git', () => {
+      const refused = box.gate('git push origin HEAD:refs/heads/ci/dark', box.repo);
+      assert.equal(refused.code, 2);
+      assert.match(refused.err, /a git clone of a repository with the pipeline that jj does not know/);
+    });
+  }
 });
 
 describe('scan, push, CI, review and deploy', () => {
