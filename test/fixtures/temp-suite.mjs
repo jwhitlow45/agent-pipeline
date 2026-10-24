@@ -9,6 +9,8 @@ const mode = process.env.TEMP_SUITE_MODE;
 
 test('a sandbox and a failure', () => {
   sandbox();
+  // A git sandbox with a lane worktree beside it, which must go too.
+  sandbox({ backend: 'git' }).addLane('demo-lane');
   tempDir('pipeline-extra-');
   if (mode === 'kill') process.kill(process.pid, 'SIGTERM');
   if (mode === 'hang') return new Promise(() => {});
