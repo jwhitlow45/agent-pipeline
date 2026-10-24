@@ -101,16 +101,21 @@ describe('the live-hole embargo across clones and backfilled git ids', () => {
   let tip;
   let homePush;
   const other = join(box.root, 'other-clone');
+  const plain = join(box.root, 'plain-clone');
   const UNSCANNED = /without a passed pre-push scan/;
+  // A plain git clone pushes its HEAD by full name.
+  const plainPush = 'git push origin HEAD:refs/heads/ci/plain';
 
   test('a legacy run is refused from a clone that lacks its commits, then allowed after pipeline status in its own repository', () => {
     ({ ws, tip } = builtRun(box, { intake: ['--live-hole'] }));
     editRun(box, 'dark', legacy);
     box.sh(`jj git clone --colocate https://github.com/example-owner/demo.git ${JSON.stringify(other)} >/dev/null 2>&1`, box.root);
     box.commit('feat: unrelated', { 'unrelated.txt': 'x\n' }, other);
+    box.sh(`git clone -q https://github.com/example-owner/demo.git ${JSON.stringify(plain)} && cd ${JSON.stringify(plain)} && echo x > plain.txt && git add plain.txt && git commit -q -m "feat: unrelated in git"`, box.root);
     const push = 'jj bookmark set ci/other -r @- && jj git push -b ci/other';
     assert.match(box.gate(push, other).err, LEGACY);
     assert.match(box.gate(push, other).err, UNSCANNED);
+    assert.match(box.gate(plainPush, plain).err, LEGACY);
     // The source repository holds every commit, so the gate computes their ids there and refuses
     // nothing for them. The push still reaches the other checks.
     box.sh('jj new main');
@@ -121,9 +126,11 @@ describe('the live-hole embargo across clones and backfilled git ids', () => {
     assert.equal(box.cli(['status', '--run', 'dark']).code, 0);
     const states = box.run('dark').gitIds;
     for (const commit of box.run('dark').lanes.a.commits) assert.match(states[commit.id], /^[0-9a-f]{40}$/);
-    const after = box.gate(push, other).err;
-    assert.match(after, UNSCANNED);
-    assert.doesNotMatch(after, LEGACY);
+    for (const [command, where] of [[push, other], [plainPush, plain]]) {
+      const after = box.gate(command, where).err;
+      assert.match(after, UNSCANNED);
+      assert.doesNotMatch(after, LEGACY);
+    }
   });
 
   test('empty commits, clean merges and octopus merges reach empty, empty and unsupported, and add no refusal at home', () => {
@@ -141,8 +148,10 @@ describe('the live-hole embargo across clones and backfilled git ids', () => {
     const home = box.gate(homePush, box.repo).err;
     assert.match(home, UNSCANNED);
     assert.doesNotMatch(home, LEGACY);
-    // A clone that lacks the octopus still refuses.
+    // A clone that lacks the octopus still refuses, and so does a copy of its change made there.
     assert.match(box.gate('jj bookmark set ci/other -r @- && jj git push -b ci/other', other).err, /lacks commit/);
+    box.sh('for name in p q r; do echo $name > $name.txt; done && git add -A && git commit -q -m "feat: the octopus copied"', plain);
+    assert.match(box.gate(plainPush, plain).err, /lacks commit/);
   });
 
   test('with the objects gone everywhere the push stays refused until the user waives, and a known patch id still refuses its copy', () => {
@@ -152,7 +161,7 @@ describe('the live-hole embargo across clones and backfilled git ids', () => {
     const waived = box.cli(['live-hole', 'waive', '--run', 'dark', '--by', 'owner', '--reason', 'the user said the old clone is gone for good']);
     assert.equal(waived.code, 0, waived.all);
     assert.ok(box.run('dark').events.some((event) => event.action === 'live hole waived'));
-    for (const [command, where] of [[homePush, box.repo], ['jj bookmark set ci/other -r @- && jj git push -b ci/other', other]]) {
+    for (const [command, where] of [[homePush, box.repo], ['jj bookmark set ci/other -r @- && jj git push -b ci/other', other], [plainPush, plain]]) {
       const err = box.gate(command, where).err;
       assert.match(err, UNSCANNED);
       assert.doesNotMatch(err, /lacks commit/);

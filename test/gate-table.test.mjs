@@ -4,7 +4,7 @@
 
 import { describe, test, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ALL_WORKFLOWS, baseConfig, builtRun, sandbox, SLUG, workflowsRule } from './helpers.mjs';
@@ -878,9 +878,13 @@ describe('what the gate cannot read refuses (R4 sweep)', () => {
   const other = join(box.root, 'other');
   const bare = join(box.root, 'bare');
   box.sh(`git clone -q https://github.com/${SLUG}.git ${JSON.stringify(plain)}`, box.root);
-  // A git repository no one registered, whose own tree holds a pipeline config.
+  // A git repository no one registered, whose own tree holds a pipeline config, and whose remote
+  // cannot be read.
   const unregistered = join(box.root, 'unregistered');
-  box.sh(`git init -q ${JSON.stringify(unregistered)} && cd ${JSON.stringify(unregistered)} && echo '{}' > pipeline.config.json && git remote add origin https://github.com/other-owner/other.git`, box.root);
+  box.sh(`git init -q ${JSON.stringify(unregistered)} && cd ${JSON.stringify(unregistered)} && echo '{}' > pipeline.config.json && git remote add origin ${JSON.stringify(join(box.root, 'missing-other.git'))}`, box.root);
+  // A bare clone of the registered repository, which has no worktree for the gate to read.
+  const bareClone = join(box.root, 'bare-clone.git');
+  box.sh(`git clone -q --bare https://github.com/${SLUG}.git ${JSON.stringify(bareClone)}`, box.root);
   box.sh('i=0; while [ $i -lt 45 ]; do ln -s l$((i+1)) l$i; i=$((i+1)); done; ln -s loopb loopa; ln -s loopa loopb; ln -s l40 short', box.root);
   // A jj repository without the pipeline whose remote cannot be read, and one with no remote at all.
   for (const [dir, remote] of [[other, join(box.root, 'missing.git')], [bare, null]]) {
@@ -890,8 +894,9 @@ describe('what the gate cannot read refuses (R4 sweep)', () => {
     box.commit('chore: one', { 'a.txt': 'a\n' }, dir);
     box.sh('jj bookmark set x -r @-', dir);
   }
-  runRows(box, { repo: box.repo, root: box.root, plain, other, bare, unregistered }, [
-    ['unregistered', 'git push origin HEAD:refs/heads/main', 2, /a git clone of a repository with the pipeline that jj does not know/],
+  runRows(box, { repo: box.repo, root: box.root, plain, other, bare, unregistered, bareClone }, [
+    ['unregistered', 'git push origin HEAD:refs/heads/main', 2, /could not read the remote's branches/],
+    ['bareClone', 'git push origin main:refs/heads/ci/x', 2, /is in a git repository with the pipeline but in no worktree of it/],
     // A heredoc the input ends inside runs to the end, as the shells read it.
     ['repo', 'cat > ~/.zshenv <<Z', 2, /shell startup file/],
     ['repo', 'cp notes.txt .claude/settings.local.json <<Z\nbody', 2, /agent settings/],
@@ -899,12 +904,14 @@ describe('what the gate cannot read refuses (R4 sweep)', () => {
     ['repo', 'cat <<Z\njj git push -b feature', 0],
     ['repo', 'echo "it is not closed', 2, /cannot read this line .*so it cannot tell what it runs or writes/],
     ['repo', 'ls >', 2, /cannot read this line/],
-    // A plain git clone of a pipeline repository has no jj view for the gate to check.
-    ['plain', 'git push origin HEAD:refs/heads/main', 2, /a git clone of a repository with the pipeline that jj does not know/],
-    ['plain', 'gh pr merge 1 --squash', 2, /a git clone of a repository with the pipeline that jj does not know/],
+    // A plain git clone of a pipeline repository is checked in git, against the remote and the
+    // config committed on its trunk.
+    ['plain', 'git push origin HEAD:refs/heads/main', 2, /Moving main is a deploy step/],
+    ['plain', 'gh pr merge 1 --squash', 2, /could not read pull request 1/],
     ['plain', 'git status', 0],
     { name: 'the clone without its config file', setup: (b) => b.sh('rm pipeline.config.json', plain) },
-    ['plain', 'git push origin HEAD:refs/heads/ci/x', 2, /a git clone of a repository with the pipeline that jj does not know/],
+    // Its HEAD is trunk's commit, already on the remote, so nothing new would leave.
+    ['plain', 'git push origin HEAD:refs/heads/ci/x', 0],
     // Links past what the system follows, or in a loop, land somewhere the gate cannot tell.
     ['root', 'echo x > %root%/l0', 2, /more links than the gate follows/],
     ['root', 'echo x > %root%/loopa', 2, /more links than the gate follows/],
@@ -1579,5 +1586,304 @@ describe('a pipe that ends a line (round 10)', () => {
     ['repo', "cat <<'EOF' |\nhello\nEOF\ngit apply", 2, PIPE],
     // && does not carry across a newline in this reading, so the line keeps its message.
     ['repo', 'git status &&\ngit push origin main', 2, /joined to other commands by a second line/],
+  ]);
+});
+
+// Plain git (design 5.5 and 7): every push is read the way git push reads it, by full names and
+// full ids, from the main worktree and a lane worktree alike.
+describe('plain git: pushes and the names git push reads', () => {
+  const box = sandbox({ config: baseConfig, backend: 'git' });
+  after(() => box.cleanup());
+  const { ws, tip } = builtRun(box);
+  const main = box.sh('git rev-parse main').trim();
+  const jjSide = join(box.root, 'jj-side');
+  box.sh('git tag v1 main && git push -q --no-verify origin main:refs/heads/ci/old');
+  // A branch named after main's full id, at the tip: git push would send the tip for that name.
+  box.sh(`git branch ${main} ${tip} && git tag ci/t ${tip} && git branch ci/two ${tip} && git tag ci/two ${tip}`);
+  box.sh(`mkdir -p ${JSON.stringify(jjSide)} && cd ${JSON.stringify(jjSide)} && jj git init --colocate >/dev/null 2>&1`, box.root);
+  const values = { repo: box.repo, root: box.root, ws, tip, main, abbrev: tip.slice(0, 12), jjSide };
+  runRows(box, values, [
+    ['ws', 'git push origin %tip%:refs/heads/ci/dark', 2, UNSCANNED],
+    ['ws', 'git push origin HEAD:refs/heads/ci/dark', 2, UNSCANNED],
+    { name: 'the run is scanned', setup: (b, v) => assert.equal(b.cli(['scan', '--run', 'dark'], { cwd: v.ws }).code, 0) },
+    ['ws', 'git push origin %tip%:refs/heads/ci/dark', 0],
+    ['ws', 'git push origin HEAD:refs/heads/ci/dark', 0],
+    ['repo', 'git push origin %tip%:refs/heads/ci/dark', 0],
+    ['ws', 'git push origin lane/demo-dark:refs/heads/ci/dark', 0],
+    ['ws', 'git push origin lane/demo-dark', 2, NOT_OURS],
+    ['ws', 'git push origin %tip%:refs/heads/feature', 2, NOT_OURS],
+    ['ws', 'git push origin %tip%:refs/heads/main', 2, /Moving main is a deploy step: No CI result/],
+    // Every force spelling.
+    ['ws', 'git push --force origin %tip%:refs/heads/ci/dark', 2, FORCE],
+    ['ws', 'git push -f origin %tip%:refs/heads/ci/dark', 2, FORCE],
+    ['ws', 'git push --force-with-lease origin %tip%:refs/heads/ci/dark', 2, FORCE],
+    ['ws', 'git push --force-if-includes origin %tip%:refs/heads/ci/dark', 2, FORCE],
+    ['ws', 'git push origin +%tip%:refs/heads/ci/dark', 2, FORCE],
+    ['ws', 'git push --mirror origin', 2, FORCE],
+    // Names as git push reads them: refs first, an object name only when no ref matches.
+    ['repo', 'git push origin %main%:refs/heads/ci/amb', 2, /A ref is named after the full id/],
+    ['repo', 'git push origin ci/t:ci/t', 2, /is not written in full/],
+    ['repo', 'git push origin ci/t:refs/heads/ci/t', 2, /is refs\/tags\/ci\/t here, not a branch/],
+    ['repo', 'git push origin ci/two:refs/heads/ci/two', 2, /matches more than one ref here/],
+    ['repo', 'git push origin %abbrev%:refs/heads/ci/dark', 2, /names no ref here/],
+    ['repo', 'git push origin %tip%:ci/dark', 2, /is not written in full/],
+    // Deletes are written in full, and only of a push branch.
+    ['repo', 'git push origin --delete refs/heads/ci/old', 0],
+    ['repo', 'git push origin :refs/heads/ci/old', 0],
+    ['repo', 'git push origin --delete ci/old', 2, /is not written in full/],
+    ['repo', 'git push origin :ci/old', 2, /is not written in full/],
+    ['repo', 'git push origin --delete refs/heads/main', 2, /It deletes main\. Agents never delete trunk/],
+    ['repo', 'git push origin --delete refs/tags/v1', 2, /refs\/tags\/v1 is not a branch/],
+    // A ref named HEAD comes before the worktree's HEAD in git push's reading.
+    { name: 'a branch named HEAD', setup: (b) => b.sh(`git update-ref refs/heads/HEAD ${main}`) },
+    ['ws', 'git push origin HEAD:refs/heads/ci/dark', 2, /A ref named HEAD exists \(refs\/heads\/HEAD\)/],
+    { name: 'a tag named HEAD in place of the branch', setup: (b) => b.sh(`git update-ref -d refs/heads/HEAD && git update-ref refs/tags/HEAD ${main}`) },
+    ['ws', 'git push origin HEAD:refs/heads/ci/dark', 2, /A ref named HEAD exists \(refs\/tags\/HEAD\)/],
+    { name: 'the tag named HEAD removed', setup: (b) => b.sh('git update-ref -d refs/tags/HEAD') },
+    ['ws', 'git update-ref refs/heads/HEAD %tip%', 2, /a ref named HEAD/],
+    ['ws', 'git update-ref FOO %tip%', 2, /a ref outside refs\//],
+    ['ws', 'git symbolic-ref FOO refs/heads/main', 2, /a ref outside refs\//],
+    ['ws', 'git update-ref --stdin', 2, /--stdin writes refs the gate cannot see/],
+    ['ws', 'git update-ref -m "x" refs/heads/ci/local %tip%', 0],
+    // jj in a plain git repository.
+    ['repo', 'jj git push --named ci/dark=%tip%', 2, /This is a plain git repository/],
+    ['repo', 'jj bookmark set ci/dark -r %tip% && git push origin ci/dark:refs/heads/ci/dark', 2, /sets a jj bookmark, and this is a plain git repository/],
+    ['jjSide', 'jj bookmark set x -r @ && git -C %repo% push origin %tip%:refs/heads/ci/dark', 2, /sets a bookmark before .*which reads the remote, not the bookmark/],
+    // A worktree's .git file and the folders git keeps for worktrees.
+    ['repo', 'Write', 2, /inside a \.git or \.jj folder/, { tool_name: 'Write', tool_input: { file_path: '%ws%/.git', content: 'gitdir: /elsewhere\n' } }],
+    ['ws', 'echo x > %repo%/.git/worktrees/demo-dark/HEAD', 2, /inside a \.git or \.jj folder/],
+    // The user's marker, in any form.
+    ['repo', 'PIPELINE_USER_PUSH=1 git push origin %tip%:refs/heads/main', 2, /names PIPELINE_USER_PUSH/],
+    ['repo', 'export PIPELINE_USER_PUSH=1', 2, /names PIPELINE_USER_PUSH/],
+    ['repo', "cat > ../env.sh <<'Z'\nexport PIPELINE_USER_PUSH=1\nZ", 2, /names PIPELINE_USER_PUSH/],
+    ['repo', 'echo $PIPELINE_USER_PUSH', 2, /names PIPELINE_USER_PUSH/],
+    // Closing or waiving a live hole is the user's.
+    ['repo', 'pipeline live-hole close --run dark --by owner --reason "fixed by hand"', 2, /the user's decision/],
+    ['repo', 'pipeline live-hole waive --run dark --by owner --reason "the clone is gone"', 2, /the user's decision/],
+    ['repo', 'cd %repo% && pipeline live-hole waive --run dark --by owner --reason x', 2, /the user's decision/],
+    ['repo', 'pipeline status --run dark', 0],
+    // Local forms and reads.
+    ['ws', 'git commit --amend -m "feat: x"', 0],
+    ['ws', 'git rebase main', 0],
+    ['ws', 'git reset --hard HEAD~1', 0],
+    ['ws', 'git cherry-pick %main%', 0],
+    ['ws', 'git revert %tip%', 0],
+    ['repo', 'git branch -D ci/two', 0],
+    ['repo', 'git branch -f ci/x %tip%', 0],
+    ['repo', 'git tag v2 main', 0],
+    ['repo', 'git checkout main', 0],
+    ['ws', 'git switch -c lane/two', 0],
+    ['repo', 'git merge ci/x', 0],
+    ['repo', 'git stash', 0],
+    ['repo', 'git worktree add ../w2 main', 0],
+    ['repo', 'git worktree list', 0],
+    ['repo', 'git worktree remove ../w2', 0],
+    ['repo', 'git gc', 0],
+    ['repo', 'git update-index --assume-unchanged README.md', 0],
+    ['ws', 'git log --oneline main..HEAD', 0],
+    ['ws', 'git status', 0],
+    ['ws', 'git diff main', 0],
+    ['ws', 'git rev-parse HEAD', 0],
+    ['ws', 'git show HEAD', 0],
+    ['repo', 'git for-each-ref', 0],
+    // A repository nested in a lane worktree is its own.
+    { name: 'a git repository nested in the lane worktree', setup: (b, v) => b.sh('git init -q inner', v.ws) },
+    ['ws', 'cd inner && git push origin HEAD:refs/heads/ci/x', 0],
+    { name: 'the nested repository names the pipeline remote', setup: (b, v) => b.sh(`git -C inner remote add origin https://github.com/${SLUG}.git`, v.ws) },
+    ['ws', 'cd inner && git push origin HEAD:refs/heads/ci/x', 2, /does not have \S+, the remote's trunk/],
+  ]);
+
+  // The gate's own reads clear git's variables, while the push it checks keeps them: with GIT_DIR
+  // set, git push would push from that repository.
+  test('a gate run with git\'s hook variables set refuses a push git would make from their repository', () => {
+    const extra = { GIT_DIR: join(jjSide, '.git'), GIT_INDEX_FILE: join(box.root, 'index'), GIT_WORK_TREE: jjSide };
+    const input = JSON.stringify({ tool_input: { command: `git push origin ${tip}:refs/heads/ci/dark` }, cwd: ws });
+    assert.match(box.cli(['gate'], { input, extra }).err, /git would push from \S*jj-side\/\.git, which is not this repository's/);
+    assert.equal(box.cli(['gate'], { input: JSON.stringify({ tool_input: { command: 'git status' }, cwd: ws }), extra }).code, 0);
+  });
+
+  test('a gate whose own environment holds the user\'s marker refuses every push', () => {
+    const input = JSON.stringify({ tool_input: { command: `git push origin ${tip}:refs/heads/ci/dark` }, cwd: ws });
+    assert.match(box.cli(['gate'], { input, extra: { PIPELINE_USER_PUSH: '1' } }).err, /PIPELINE_USER_PUSH is set in the environment the agent runs in/);
+  });
+});
+
+describe('plain git: the user moves trunk (deploy.runBy user)', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user' } }, backend: 'git' });
+  after(() => box.cleanup());
+  const sha = box.commit('feat: on top of main', { 'x.txt': 'x\n' });
+  box.ghScript([{ match: 'pr view 7 ', stdout: { baseRefName: 'main', headRefName: 'ci/x', headRefOid: sha, isDraft: false } }]);
+  runRows(box, { repo: box.repo, sha }, [
+    ['repo', 'git push origin %sha%:refs/heads/main', 2, new RegExp(`The user runs deploys and moves main.*PIPELINE_USER_PUSH=1 git push origin ${sha}:refs/heads/main`)],
+    ['repo', 'gh pr merge 7 --squash', 2, /The user runs deploys and moves main/],
+    ['repo', 'git push origin --delete refs/heads/main', 2, /It deletes main/],
+  ]);
+});
+
+describe('plain git: the review provider is the committed config\'s', () => {
+  const box = sandbox({ config: { ...baseConfig, review: { provider: 'agent-review' } }, backend: 'git' });
+  after(() => box.cleanup());
+  runRows(box, { repo: box.repo }, [
+    ['repo', 'gh pr create --title x', 2, /review\.provider is "agent-review", which reads jj repositories only/],
+    ['repo', 'gh pr create --draft --title x', 0],
+  ]);
+});
+
+// Deploy revisions outside every worktree (design 5.4): a full id, or a full ref name that is not
+// symbolic, then ~n and ^n. Each allowed form reaches the deploy check at the commit it names.
+describe('plain git: a deploy revision outside the worktrees', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, match: 'release\\.sh' } }, backend: 'git' });
+  after(() => box.cleanup());
+  box.write('scripts/release.sh', '#!/bin/sh\necho deploying "$@"\n', box.root);
+  box.write('pipeline.local.json', JSON.stringify({ deploy: { command: `${join(box.root, 'scripts', 'release.sh')} {name} {tip}` } }));
+  box.sh(`chmod +x ${join(box.root, 'scripts', 'release.sh')}`);
+  const [c1, c2, c3] = ['one', 'two', 'three'].map((name) => box.commit(`feat: ${name}`, { [`${name}.txt`]: `${name}\n` }));
+  box.sh(`git tag v1 ${c2} && git worktree add -q ../wt ${c1} && git symbolic-ref refs/heads/alias refs/heads/main`);
+  box.sh('git update-ref refs/worktree/current HEAD && git symbolic-ref refs/worktree/current refs/heads/main && git update-ref refs/worktree/x HEAD && git update-ref refs/bisect/x HEAD');
+  box.cli(['config', '--check']);
+  const jjSide = join(box.root, 'jj-side');
+  box.sh(`mkdir -p ${JSON.stringify(jjSide)} && cd ${JSON.stringify(jjSide)} && jj git init --colocate >/dev/null 2>&1`, box.root);
+  const at = (id) => new RegExp(`No pipeline run records ${id.slice(0, 12)}`);
+  const SHORT = /is not a full commit id or a full ref name/;
+  const deploy = (rev) => `%root%/scripts/release.sh b1 ${rev}`;
+  runRows(box, { root: box.root, repo: box.repo, jjSide }, [
+    // A jj bookmark names nothing in a plain git repository.
+    ['jjSide', `jj bookmark set x -r @ && ${deploy('x')}`, 2, /sets a jj bookmark, and the repository this acts on is a plain git repository/],
+    ['root', deploy(c2), 2, at(c2)],
+    ['root', deploy('refs/heads/main~2'), 2, at(c1)],
+    ['root', deploy('refs/tags/v1^'), 2, at(c1)],
+    ['root', deploy('refs/heads/main'), 2, at(c3)],
+    ...['main~2', 'v1^', 'HEAD', 'HEAD~1', 'AUTO_MERGE', 'worktree/current', 'refs/worktree/current', 'refs/worktree/x', 'refs/bisect/x', 'main-worktree/x', 'worktrees/wt/x', 'refs/heads/HEAD', 'refs/remotes/origin/HEAD']
+      .map((rev) => ['root', deploy(rev), 2, SHORT]),
+    ...['main-worktree/HEAD', 'worktrees/wt/HEAD', 'origin/HEAD'].flatMap((rev) => [rev, `${rev}~1`, `${rev}^1`]).map((rev) => ['root', deploy(rev), 2, SHORT]),
+    ['root', deploy('refs/heads/alias'), 2, /is a symbolic ref/],
+    ['root', deploy('refs/heads/nothing'), 2, /is not a ref here/],
+    // A branch FOO at c3, and a root ref FOO at c2 in the main worktree and at c1 in the other.
+    { name: 'a branch and root refs named FOO', setup: (b) => b.sh(`git branch FOO ${c3} && git update-ref FOO ${c2} && git -C ../wt update-ref FOO ${c1}`) },
+    ['root', deploy('FOO'), 2, SHORT],
+    ['root', deploy('refs/heads/FOO~1'), 2, at(c2)],
+    // A root ref .git/main beside the branch main.
+    { name: 'a root ref named main', setup: (b) => b.sh(`git update-ref main ${c1}`) },
+    ['root', deploy('main'), 2, SHORT],
+    ['root', deploy('main~1'), 2, SHORT],
+    ['root', deploy('refs/heads/main~1'), 2, at(c2)],
+    // Inside a worktree the revision is read where the script runs.
+    ['repo', `cd %root%/wt && ${deploy('HEAD')}`, 2, at(c1)],
+  ]);
+});
+
+// Clones (design 6.5 and 5.4): a registry entry lists every clone, each clone's git folders stay
+// protected, and a deploy from outside every worktree acts on the clone that holds the script.
+describe('plain git: clones of one repository', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, match: 'release\\.sh' } }, backend: 'git' });
+  after(() => box.cleanup());
+  const second = join(box.root, 'second');
+  const separate = join(box.root, 'separate.git');
+  const third = join(box.root, 'third');
+  const separateThird = join(box.root, 'third-git');
+  const bare = join(box.root, 'bare.git');
+  const bareTree = join(box.root, 'bare-tree');
+  const script = '#!/bin/sh\necho deploying "$@"\n';
+  box.write('scripts/release.sh', script, box.root);
+  box.sh(`chmod +x ${join(box.root, 'scripts', 'release.sh')}`);
+  const command = { deploy: { command: `${join(box.root, 'scripts', 'release.sh')} {name} {tip}` } };
+  box.write('pipeline.local.json', JSON.stringify(command));
+  box.sh(`git clone -q --separate-git-dir ${JSON.stringify(separate)} https://github.com/${SLUG}.git ${JSON.stringify(second)}`, box.root);
+  box.write('pipeline.local.json', JSON.stringify(command), second);
+  box.sh(`git clone -q --separate-git-dir ${JSON.stringify(separateThird)} https://github.com/${SLUG}.git ${JSON.stringify(third)}`, box.root);
+  const first = box.commit('feat: in the first clone', { 'a.txt': 'a\n' });
+  box.setBranch('ci/x', first);
+  const other = box.commit('feat: in the second clone', { 'b.txt': 'b\n' }, second);
+  box.setBranch('ci/x', other, second);
+  box.cli(['config', '--check']);
+  box.cli(['config', '--check'], { cwd: second });
+  const deploy = (rev) => `%root%/scripts/release.sh b1 ${rev}`;
+  const TWO = /Two clones of this repository could be the one this deploys/;
+  const GIT_FOLDER = /is in a registered repository's git folder/;
+  runRows(box, { root: box.root, repo: box.repo, second, separate, third, separateThird }, [
+    // Each clone's git folders stay protected after another registers, a separate one too.
+    ['root', 'echo x > %separate%/config', 2, GIT_FOLDER],
+    ['root', 'echo x > %repo%/.git/config', 2, /inside a \.git or \.jj folder/],
+    ['root', 'echo x > %separateThird%/config', 0],
+    { name: 'a third clone registers', setup: (b, v) => b.cli(['config', '--check'], { cwd: v.third }) },
+    ['root', 'echo x > %separateThird%/config', 2, GIT_FOLDER],
+    ['root', 'echo x > %separate%/info/exclude', 2, GIT_FOLDER],
+    ['root', 'Write', 2, GIT_FOLDER, { tool_name: 'Write', tool_input: { file_path: '%separate%/HEAD', content: 'x' } }],
+    // ci/x is a different commit in each clone, so only a full id says what deploys.
+    ['root', deploy('refs/heads/ci/x'), 2, TWO],
+    ['root', deploy(first), 2, new RegExp(`No pipeline run records ${first.slice(0, 12)}`)],
+    ['root', deploy(other), 2, new RegExp(`No pipeline run records ${other.slice(0, 12)}`)],
+    // Registered in the other order, the same.
+    { name: 'the clones registered the other way round', setup: (b) => {
+      const path = join(b.root, 'state', 'repos.json');
+      const all = JSON.parse(readFileSync(path, 'utf8'));
+      for (const entry of Object.values(all.repos)) entry.clones.reverse();
+      writeFileSync(path, JSON.stringify(all));
+    } },
+    ['root', deploy('refs/heads/ci/x'), 2, TWO],
+    ['root', deploy(other), 2, new RegExp(`No pipeline run records ${other.slice(0, 12)}`)],
+    // Inside a worktree the clone is that worktree's.
+    ['second', deploy('refs/heads/ci/x'), 2, new RegExp(`No pipeline run records ${other.slice(0, 12)}`)],
+  ]);
+
+  test('a bare repository\'s worktrees keep one record, and a deploy works while one of them remains', () => {
+    // A bare clone keeps no remote-tracking refs until its fetch refspec says to, as a bare-repository
+    // worktree layout sets up.
+    box.sh(`git clone -q --bare https://github.com/${SLUG}.git ${JSON.stringify(bare)} && git -C ${JSON.stringify(bare)} config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' && git -C ${JSON.stringify(bare)} fetch -q origin`, box.root);
+    const trees = ['one', 'two'].map((name) => join(bareTree, name));
+    for (const [i, tree] of trees.entries()) {
+      box.sh(`git -C ${JSON.stringify(bare)} worktree add -q ${JSON.stringify(tree)} -b t${i} main`, box.root);
+      box.write('release.sh', script, tree);
+      box.sh('chmod +x release.sh', tree);
+    }
+    box.write('pipeline.local.json', JSON.stringify({ deploy: { command: './release.sh {name} {tip}' } }), bare);
+    for (const tree of trees) assert.equal(box.cli(['config', '--check'], { cwd: tree }).code, 0);
+    const [entry] = Object.values(JSON.parse(readFileSync(join(box.root, 'state', 'repos.json'), 'utf8')).repos);
+    const bareClones = entry.clones.filter((clone) => clone.path === realpathSync(bare));
+    assert.equal(bareClones.length, 1);
+    assert.deepEqual(bareClones[0].worktrees.sort(), trees.map((tree) => realpathSync(tree)).sort());
+    const main = box.sh('git rev-parse main', trees[0]).trim();
+    const run = (tree) => box.gate(`${join(tree, 'release.sh')} b1 ${main}`, box.root).err;
+    assert.match(run(trees[1]), new RegExp(`No pipeline run records ${main.slice(0, 12)}`));
+    box.sh(`git -C ${JSON.stringify(bare)} worktree remove --force ${JSON.stringify(trees[0])}`, box.root);
+    assert.match(run(trees[1]), new RegExp(`No pipeline run records ${main.slice(0, 12)}`));
+  });
+});
+
+describe('plain git: a bare repository with no registered worktree left', () => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, match: 'release\\.sh' } }, backend: 'git' });
+  after(() => box.cleanup());
+  const bare = join(box.root, 'bare.git');
+  const tree = join(box.root, 'tree');
+  box.write('scripts/release.sh', '#!/bin/sh\necho deploying "$@"\n', box.root);
+  box.sh(`chmod +x ${join(box.root, 'scripts', 'release.sh')}`);
+  box.sh(`git clone -q --bare https://github.com/${SLUG}.git ${JSON.stringify(bare)} && git -C ${JSON.stringify(bare)} config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' && git -C ${JSON.stringify(bare)} fetch -q origin && git -C ${JSON.stringify(bare)} worktree add -q ${JSON.stringify(tree)} -b t main`, box.root);
+  box.write('pipeline.local.json', JSON.stringify({ deploy: { command: `${join(box.root, 'scripts', 'release.sh')} {name} {tip}` } }), bare);
+  // Only the bare repository's worktree registers: the sandbox's own clone runs no pipeline command.
+  box.cli(['config', '--check'], { cwd: tree });
+  const main = box.sh('git rev-parse main', tree).trim();
+  runRows(box, { root: box.root, main }, [
+    ['root', '%root%/scripts/release.sh b1 %main%', 2, new RegExp(`No pipeline run records ${main.slice(0, 12)}`)],
+    { name: 'the worktree is removed', setup: (b) => b.sh(`git -C ${JSON.stringify(bare)} worktree remove --force ${JSON.stringify(tree)}`, b.root) },
+    ['root', '%root%/scripts/release.sh b1 %main%', 2, /No registered worktree of this repository remains/],
+  ]);
+});
+
+// A run recorded in jj goes on from a plain git clone of the same remote: the commits keep their
+// ids, so the scans recorded in jj cover them there.
+describe('a run recorded in jj and continued from a plain git clone', () => {
+  const box = sandbox({ config: baseConfig });
+  after(() => box.cleanup());
+  const { ws, tip } = builtRun(box);
+  box.cli(['scan', '--run', 'dark'], { cwd: ws });
+  box.sh(`jj bookmark set ci/dark -r ${tip} && jj git push --bookmark ci/dark --allow-new 2>/dev/null || jj git push --bookmark ci/dark`);
+  const plain = join(box.root, 'plain');
+  box.sh(`git clone -q https://github.com/${SLUG}.git ${JSON.stringify(plain)} && git -C ${JSON.stringify(plain)} checkout -q ${tip}`, box.root);
+  runRows(box, { plain, tip }, [
+    ['plain', 'git push origin %tip%:refs/heads/ci/dark-2', 0],
+    ['plain', 'git push origin HEAD:refs/heads/ci/dark-2', 0],
+    { name: 'a commit made in the plain clone', setup: (b, v) => b.sh('echo more > more.txt && git add more.txt && git commit -q -m "feat: more"', v.plain) },
+    ['plain', 'git push origin HEAD:refs/heads/ci/dark-2', 2, UNSCANNED],
+    ['plain', 'pipeline status --run dark', 0],
   ]);
 });

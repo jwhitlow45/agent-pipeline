@@ -261,9 +261,11 @@ forEachBackend('build lanes', (backend) => {
 forEachBackend('a built run is scanned before it is pushed', (backend) => {
   const box = sandbox({ config: baseConfig, backend });
   after(() => box.cleanup());
+  let ws;
+  let tip;
 
   test('builds, checks, mutation checks and scans the run\'s commits', () => {
-    const { ws, tip } = builtRun(box);
+    ({ ws, tip } = builtRun(box));
     const run = box.run('dark');
     assert.equal(run.stages.build.state, 'passed');
     assert.equal(run.lanes.a.commits.length, 2);
@@ -282,13 +284,15 @@ forEachBackend('a built run is scanned before it is pushed', (backend) => {
     assert.match(refused.out, /AWS key/);
   });
 
-  // The gate reads plain git in the next step. Until then a push from a git clone of a pipeline
-  // repository is refused, never let through unchecked.
+  // In plain git the gate checks a push by its full id against the run's scans, as it checks a jj
+  // push by its bookmark.
   if (backend === 'git') {
-    test('the gate still refuses a push from plain git', () => {
-      const refused = box.gate('git push origin HEAD:refs/heads/ci/dark', box.repo);
-      assert.equal(refused.code, 2);
-      assert.match(refused.err, /a git clone of a repository with the pipeline that jj does not know/);
+    test('the gate checks a push from plain git against the run\'s scans', () => {
+      const scanned = box.gate(`git push origin ${tip}:refs/heads/ci/dark`, ws);
+      assert.equal(scanned.code, 0, scanned.err);
+      assert.match(box.gate(`git push origin ${box.head(ws)}:refs/heads/ci/dark`, ws).err, /without a passed pre-push scan/);
+      assert.match(box.gate(`git push origin ${tip}:ci/dark`, ws).err, /refs\/heads\/ci\/dark/);
+      assert.match(box.gate(`jj git push --named ci/dark=${tip}`, ws).err, /This is a plain git repository/);
     });
   }
 });
