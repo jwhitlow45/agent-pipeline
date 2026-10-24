@@ -105,4 +105,31 @@ forEachBackend('the mutation tree', (backend) => {
     const removed = box.cli(['mutation', '--run', 'one', '--lane', 'a', '--commit', second, '--test', 'src/contrast.test.mjs'], { cwd: ws });
     assert.equal(removed.code, 0, removed.all);
   });
+
+  // A merge's own change is its diff against its first parent here: the remerge diff the records
+  // use has no form git apply takes.
+  test('removes the fix a merge carries', () => {
+    started(box, 'two');
+    const ws = box.addLane('demo-two');
+    assert.equal(addLane(box, 'two', ws, 'lib/**').code, 0);
+    const base = box.head(ws);
+    const left = box.commit('feat: a left side file', { 'lib/left.mjs': 'export const left = 1;\n' }, ws);
+    if (backend === 'git') {
+      box.sh(`git checkout -q -b lane/side ${base}`, ws);
+      box.commit('feat: a right side file', { 'lib/right.mjs': 'export const right = 1;\n' }, ws);
+      box.sh('git checkout -q lane/demo-two && git merge -q --no-ff --no-commit lane/side', ws);
+    } else {
+      box.sh(`jj new ${base}`, ws);
+      const right = box.commit('feat: a right side file', { 'lib/right.mjs': 'export const right = 1;\n' }, ws);
+      box.sh(`jj new ${left} ${right}`, ws);
+    }
+    const merge = box.commit('feat(ui): dark mode toggle in the merge', { 'lib/theme.mjs': 'export const dark = () => true;\n', 'lib/theme.test.mjs': TEST_FILE }, ws);
+    const parents = backend === 'git' ? box.sh(`git rev-list --parents -n1 ${merge}`, ws).trim().split(' ').length - 1 : Number(box.sh(`jj log --no-graph -r ${merge} -T 'parents.len()'`, ws));
+    assert.equal(parents, 2);
+    const commits = box.cli(['commits', '--run', 'two', '--lane', 'a'], { cwd: ws });
+    assert.equal(commits.code, 0, commits.all);
+    const result = box.cli(['mutation', '--run', 'two', '--lane', 'a', '--commit', merge, '--test', 'lib/theme.test.mjs'], { cwd: ws });
+    assert.equal(result.code, 0, result.all);
+    assert.match(result.out, /passes with the fix, fails without it/);
+  });
 });

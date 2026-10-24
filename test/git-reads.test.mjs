@@ -15,7 +15,7 @@ import { scanResult } from '../lib/scan.mjs';
 import { DEFAULTS } from '../lib/config.mjs';
 import { range, vcsAt } from '../lib/vcs.mjs';
 import { detect } from '../lib/vcs-detect.mjs';
-import { agreedRoot, binaryGuard, checkTree, exportTree, git, gitEnv, GitError, gitVcs, hookOf, trackingProblem, where } from '../lib/vcs-git.mjs';
+import { agreedRoot, binaryGuard, checkTree, exportTree, git, gitEnv, GitError, gitVcs, hookOf, removalPatch, trackingProblem, where } from '../lib/vcs-git.mjs';
 
 const PLUGIN = join(dirname(fileURLToPath(import.meta.url)), '..');
 const TOKEN = `AKIA${'ABCDEFGHIJKLMNOP'}`;
@@ -156,6 +156,17 @@ describe('the clean check and the mutation tree in git', () => {
   box.sh(`git init -q ${JSON.stringify(sub)} && cd ${JSON.stringify(sub)} && echo s > s.txt && git add s.txt && git commit -q -m s`, box.root);
   box.sh(`git -c protocol.file.allow=always submodule add -q ${JSON.stringify(sub)} sub && git commit -q -m "chore: a submodule"`, dir);
   const vcs = gitVcs(dir);
+
+  test('the removal patch of a root commit, and a clear failure when a merge leaves a path as its first parent has it', () => {
+    const at = where(dir, detect(dir).gitDir);
+    const root = box.sh('git rev-list --max-parents=0 HEAD', dir).trim();
+    assert.match(removalPatch(at, root, ['README.md']), /^\+# demo$/m);
+    box.sh('git checkout -q -b side HEAD~1 && echo side > side.txt && git add side.txt && git commit -q -m side && git checkout -q - && git merge -q --no-ff -m "merge: side" side', dir);
+    const merge = box.sh('git rev-parse HEAD', dir).trim();
+    assert.throws(() => removalPatch(at, merge, ['README.md']), /git gives no change to README\.md in \S+ against its first parent, so there is no fix to remove/);
+    assert.match(removalPatch(at, merge, ['side.txt']), /^\+side$/m);
+    box.sh('git reset -q --hard HEAD~1 && git branch -q -D side', dir);
+  });
 
   test('a clean worktree is on HEAD, and an untracked file is uncommitted work', () => {
     const head = box.sh('git rev-parse HEAD', dir).trim();
