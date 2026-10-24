@@ -297,22 +297,37 @@ forEachBackend('a built run is scanned before it is pushed', (backend) => {
   }
 });
 
-describe('scan, push, CI, review and deploy', () => {
-  const box = sandbox({ config: baseConfig });
+forEachBackend('scan, push, CI, review and deploy', (backend) => {
+  const box = sandbox({ config: baseConfig, backend });
   after(() => box.cleanup());
+  const git = backend === 'git';
   let ws;
   let tip;
+  // The agent's push of the lane's tip to ci/dark: a bookmark in jj, the full id in git.
+  const push = () => (git ? `git push origin ${tip}:refs/heads/ci/dark` : 'jj bookmark set ci/dark -r @- && jj git push --bookmark ci/dark');
 
   test('the gate refuses an unscanned push, then allows it after a passed scan', () => {
     ({ ws, tip } = builtRun(box));
-    const blocked = box.gate('jj bookmark set ci/dark -r @- && jj git push --bookmark ci/dark', ws);
+    const blocked = box.gate(push(), ws);
     assert.equal(blocked.code, 2);
     assert.match(blocked.err, /without a passed pre-push scan/);
     assert.equal(box.cli(['scan', '--run', 'dark'], { cwd: ws }).code, 0);
-    assert.equal(box.gate('jj bookmark set ci/dark -r @- && jj git push --bookmark ci/dark', ws).code, 0);
+    assert.equal(box.gate(push(), ws).code, 0);
   });
 
-  test('the gate refuses pushes to other branches, force pushes and pushes it cannot name', () => {
+  if (git) {
+    test('the gate refuses pushes to other branches, force pushes and pushes it cannot name', () => {
+      assert.match(box.gate(`git push origin ${tip}:refs/heads/feature`, ws).err, /not a branch agents push to/);
+      assert.match(box.gate('git push origin', ws).err, /It pushes whatever git picks/);
+      assert.match(box.gate(`git push --force origin ${tip}:refs/heads/ci/dark`, ws).err, /force push/);
+      assert.match(box.gate(`git push origin +${tip}:refs/heads/ci/dark`, ws).err, /force push/);
+      assert.match(box.gate(`git push --no-verify origin ${tip}:refs/heads/ci/dark`, ws).err, /skips the pre-push hook/);
+      assert.match(box.gate(`git push fork ${tip}:refs/heads/ci/dark`, ws).err, /pushes to fork/);
+      assert.match(box.gate(`cd "$SOMEWHERE" && git push origin ${tip}:refs/heads/ci/dark`, ws).err, /built at run time/);
+      assert.equal(box.gate('echo "git push is documented here" > notes.txt', ws).code, 0);
+      assert.equal(box.gate(`git push --dry-run origin ${tip}:refs/heads/ci/dark`, ws).code, 0);
+    });
+  } else test('the gate refuses pushes to other branches, force pushes and pushes it cannot name', () => {
     assert.match(box.gate('jj bookmark set feature -r @- && jj git push --bookmark feature', ws).err, /not a branch agents push to/);
     assert.match(box.gate('jj bookmark set feature -r @- && jj git push --all', ws).err, /feature is not a branch agents push to/);
     assert.match(box.gate('jj git push -c @-', ws).err, /push-[a-z]+ is not a branch agents push to/);
@@ -327,8 +342,9 @@ describe('scan, push, CI, review and deploy', () => {
   });
 
   test('a push records the run\'s tip, and mirroring sets statuses only on pushed commits', () => {
-    box.sh('jj bookmark set ci/dark -r @- && jj git push --bookmark ci/dark', ws);
-    box.cli(['mirror-hook'], { input: JSON.stringify({ tool_input: { command: 'jj git push --bookmark ci/dark' }, cwd: ws }) });
+    // In git the push runs the real pre-push hook, which allows the scanned tip.
+    box.sh(git ? `git push -q origin ${tip}:refs/heads/ci/dark` : 'jj bookmark set ci/dark -r @- && jj git push --bookmark ci/dark', ws);
+    box.cli(['mirror-hook'], { input: JSON.stringify({ tool_input: { command: git ? `git push origin ${tip}:refs/heads/ci/dark` : 'jj git push --bookmark ci/dark' }, cwd: ws }) });
     const run = box.run('dark');
     assert.equal(run.stages.push.state, 'passed');
     assert.deepEqual(run.pushedBranches, ['ci/dark']);
@@ -344,7 +360,7 @@ describe('scan, push, CI, review and deploy', () => {
     const result = box.cli(['mirror', '--run', 'dark']);
     assert.equal(result.code, 1);
     assert.match(result.out, /pipeline\/build on [0-9a-f]{12} not set: HTTP 403/);
-    const hook = box.cli(['mirror-hook'], { input: JSON.stringify({ tool_input: { command: 'jj git push --bookmark ci/dark' }, cwd: ws }) });
+    const hook = box.cli(['mirror-hook'], { input: JSON.stringify({ tool_input: { command: git ? `git push origin ${tip}:refs/heads/ci/dark` : 'jj git push --bookmark ci/dark' }, cwd: ws }) });
     const context = JSON.parse(hook.out).hookSpecificOutput.additionalContext;
     assert.match(context, /could not set stage statuses on GitHub/);
     assert.match(context, /pipeline mirror --run/);
@@ -352,13 +368,23 @@ describe('scan, push, CI, review and deploy', () => {
   });
 
   test('a sideways move of a pushed branch is refused as a force push, with a new name offered', () => {
-    box.commit('fix(ui): later fix', { 'src/theme.mjs': 'export const dark = () => !false;\n' }, ws);
-    box.sh('jj describe -r @-- -m "docs: reworded after push"', ws);
-    const blocked = box.gate('jj bookmark set ci/dark -r @- --allow-backwards && jj git push --bookmark ci/dark', ws);
+    const later = box.commit('fix(ui): later fix', { 'src/theme.mjs': 'export const dark = () => !false;\n' }, ws);
+    if (git) box.sh(`git reset -q --hard HEAD~1 && git commit -q --amend -m "docs: reworded after push" && git cherry-pick ${later} >/dev/null`, ws);
+    else box.sh('jj describe -r @-- -m "docs: reworded after push"', ws);
+    const blocked = box.gate(git ? 'git push origin HEAD:refs/heads/ci/dark' : 'jj bookmark set ci/dark -r @- --allow-backwards && jj git push --bookmark ci/dark', ws);
     assert.equal(blocked.code, 2);
     assert.match(blocked.err, /would be a force push.*ci\/dark-2/s);
+    // git has no bookmark to forget.
+    if (git) assert.doesNotMatch(blocked.err, /jj/);
     assert.equal(box.cli(['push', '--run', 'dark', '--bookmark', 'ci/dark', '--next-name']).out.trim(), 'ci/dark-2');
-    box.sh('jj undo && jj undo', ws);
+    if (git) box.sh(`git reset -q --hard ${tip}`, ws);
+    else box.sh('jj undo && jj undo', ws);
+  });
+
+  test('pipeline push prints the push for the backend, by full id in git', () => {
+    const printed = box.cli(['push', '--run', 'dark', '--bookmark', 'ci/dark-2']);
+    assert.equal(printed.code, 0, printed.all);
+    assert.match(printed.out, git ? new RegExp(`^  git push origin ${tip}:refs/heads/ci/dark-2$`, 'm') : /^  jj git push --remote origin --bookmark ci\/dark-2$/m);
   });
 
   test('CI counts only once every job has finished', () => {
@@ -414,6 +440,7 @@ describe('scan, push, CI, review and deploy', () => {
     const allowed = box.cli(['deploy', 'check', '--run', 'dark']);
     assert.equal(allowed.code, 0, allowed.all);
     assert.match(allowed.out, /Run: \.\/deploy\.sh dark/);
+    if (git) assert.match(allowed.out, new RegExp(`Move main with: git push origin ${tip}:refs/heads/main`));
     assert.equal(box.gate(`./deploy.sh dark ${tip.slice(0, 12)}`).code, 0);
     assert.match(box.gate('./deploy.sh dark main').err, /No pipeline run records/);
   });
@@ -431,17 +458,30 @@ describe('scan, push, CI, review and deploy', () => {
   });
 
   test('cleanup lists what is left and passes once branches, workspaces and folders are gone', () => {
-    box.sh(`jj bookmark set main -r ${tip} && jj git push --bookmark main`);
+    box.setBranch('main', tip);
+    box.pushRaw('main');
     const left = box.cli(['cleanup', '--run', 'dark']);
     assert.equal(left.code, 1);
     assert.match(left.out, /ci\/dark is merged but still on origin/);
-    assert.match(left.out, /Workspace demo-dark/);
-    // The deletion and its push are separate commands, and the gate allows the push of a deleted ci/* branch.
-    assert.match(left.out, /jj git push --remote origin --bookmark ci\/dark/);
-    box.sh('jj bookmark delete ci/dark');
-    assert.equal(box.gate('jj git push --remote origin --bookmark ci/dark').code, 0);
-    box.sh('jj git push --remote origin --bookmark ci/dark && jj workspace forget demo-dark');
-    box.sh(`rm -rf ${JSON.stringify(ws)}`);
+    if (git) {
+      assert.match(left.out, /Worktree \S+demo-dark \(lane a\) is still in git's list/);
+      assert.match(left.out, /Branch lane\/demo-dark of lane a still exists/);
+      // The delete push comes first, and the gate allows it for a ci/* branch.
+      assert.match(left.out, /^ {4}git push origin --delete refs\/heads\/ci\/dark$/m);
+      assert.doesNotMatch(left.out, /git branch -D ci\/dark/);
+      assert.equal(box.gate('git push origin --delete refs/heads/ci/dark').code, 0);
+      box.sh('git push -q origin --delete refs/heads/ci/dark');
+      assert.match(left.out, /^ {4}git worktree remove "\S+demo-dark"$/m);
+      box.sh(`git worktree remove ${JSON.stringify(ws)} && git branch -D lane/demo-dark`);
+    } else {
+      assert.match(left.out, /Workspace demo-dark/);
+      // The deletion and its push are separate commands, and the gate allows the push of a deleted ci/* branch.
+      assert.match(left.out, /jj git push --remote origin --bookmark ci\/dark/);
+      box.sh('jj bookmark delete ci/dark');
+      assert.equal(box.gate('jj git push --remote origin --bookmark ci/dark').code, 0);
+      box.sh('jj git push --remote origin --bookmark ci/dark && jj workspace forget demo-dark');
+      box.sh(`rm -rf ${JSON.stringify(ws)}`);
+    }
     const done = box.cli(['cleanup', '--run', 'dark']);
     assert.equal(done.code, 0, done.all);
     assert.equal(box.run('dark').lanesReleased, true);
@@ -460,35 +500,53 @@ describe('scan, push, CI, review and deploy', () => {
   });
 });
 
-describe('rebase onto main', () => {
-  const box = sandbox({ config: { ...baseConfig, review: { provider: 'agent-review' } } });
+// The rebase steps in each backend's own commands: onto main, and rewriting the lane's first commit
+// with new content while the commit above it keeps its diff.
+const rebaseOntoMain = (box, ws) => box.sh(box.backend === 'git' ? 'git rebase -q main' : 'jj rebase -b @ -d main', ws);
+function rewriteFirst(box, ws, path, text) {
+  if (box.backend === 'git') {
+    const top = box.head(ws);
+    box.sh('git reset -q --hard HEAD~1', ws);
+    box.write(path, text, ws);
+    box.sh(`git commit -q -a --amend --no-edit && git cherry-pick ${top} >/dev/null`, ws);
+    return;
+  }
+  box.sh('jj edit @--', ws);
+  box.write(path, text, ws);
+  box.sh('jj new', ws);
+  box.sh('jj edit @-', ws);
+  box.sh('jj new', ws);
+}
+
+// Review is agent-review's in jj and the builtin one in git, where agent-review does not read.
+forEachBackend('rebase onto main', (backend) => {
+  const git = backend === 'git';
+  const box = sandbox({ config: { ...baseConfig, review: { provider: git ? 'builtin' : 'agent-review' } }, backend });
   after(() => box.cleanup());
 
   test('review coverage carries over when patch-ids match, and reopens when a diff changed', () => {
     const { ws, tip } = builtRun(box);
-    const ids = box.sh(`jj log --no-graph -r 'main..${tip}' -T 'commit_id ++ "\\n"'`, ws).trim().split('\n');
     const commits = box.run('dark').lanes.a.commits;
-    mkdirSync(box.env.AGENT_REVIEW_LEDGER, { recursive: true });
-    writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, 'dark.json'), JSON.stringify({ topic: 'dark', repo: ws, identity: `github:${SLUG}`, folder: join(box.root, 'rv'), status: 'consensus', rounds: [{ n: 1, commits }], consensus: { tip, commits, reviewers: 'a, b', rounds: 1 } }));
-    assert.equal(ids.length, 2);
-    box.commit('chore: unrelated work on main', { 'other.txt': 'x\n' });
-    box.sh('jj bookmark set main -r @- && jj git push --bookmark main');
-    box.sh('jj rebase -b @ -d main', ws);
-    const moved = box.sh('jj log --no-graph -r @- -T commit_id', ws).trim();
+    if (git) assert.equal(box.cli(['review', 'skip', '--run', 'dark', '--reason', 'the user said to skip review for this test']).code, 0);
+    else {
+      mkdirSync(box.env.AGENT_REVIEW_LEDGER, { recursive: true });
+      writeFileSync(join(box.env.AGENT_REVIEW_LEDGER, 'dark.json'), JSON.stringify({ topic: 'dark', repo: ws, identity: `github:${SLUG}`, folder: join(box.root, 'rv'), status: 'consensus', rounds: [{ n: 1, commits }], consensus: { tip, commits, reviewers: 'a, b', rounds: 1 } }));
+    }
+    assert.equal(commits.length, 2);
+    box.setBranch('main', box.commit('chore: unrelated work on main', { 'other.txt': 'x\n' }));
+    box.pushRaw('main');
+    rebaseOntoMain(box, ws);
+    const moved = box.head(ws);
     const carried = box.cli(['rebase', '--run', 'dark', '--tip', moved], { cwd: ws });
     assert.match(carried.out, /2 commits keep their patch-id, 0 commits changed, 0 commits lack review consensus/);
     assert.equal(box.run('dark').stages.build.state, 'passed');
     box.cli(['scan', '--run', 'dark'], { cwd: ws });
     assert.equal(box.run('dark').stages.scan.state, 'passed');
-    box.sh('jj edit @--', ws);
-    box.write('src/theme.mjs', 'export const dark = () => 1 === 1;\n', ws);
-    box.sh('jj new', ws);
-    box.sh('jj edit @-', ws);
-    box.sh('jj new', ws);
-    const changed = box.sh('jj log --no-graph -r @- -T commit_id', ws).trim();
+    rewriteFirst(box, ws, 'src/theme.mjs', 'export const dark = () => 1 === 1;\n');
+    const changed = box.head(ws);
     const reopened = box.cli(['rebase', '--run', 'dark', '--tip', changed], { cwd: ws });
     assert.match(reopened.out, /1 commit changed, 1 commit lack review consensus/);
-    assert.match(reopened.out, /agent-review round --topic/);
+    assert.match(reopened.out, git ? /pipeline review round --topic/ : /agent-review round --topic/);
     assert.equal(box.run('dark').stages.build.state, 'stale');
     // New commit ids: the scan and CI run again on them.
     assert.equal(box.run('dark').stages.scan.state, 'stale');
@@ -496,30 +554,37 @@ describe('rebase onto main', () => {
     const build = box.cli(['build', '--run', 'dark']);
     assert.equal(build.code, 1);
     assert.match(build.out, /not in the rebased range/);
-    assert.match(build.out, /has no mutation check/);
+    // jj finds the rewritten commit by its change id, which carries no evidence. git has no change
+    // ids, so the rewritten commit is lost, and the lane must be recorded again.
+    if (git) assert.match(build.out, /feat\(ui\): dark mode toggle is not in the rebased range/);
+    else assert.match(build.out, /has no mutation check/);
   });
 });
 
-describe('a rebase that changes the lane tip\'s diff', () => {
-  const box = sandbox({ config: { ...baseConfig, review: { provider: 'agent-review' } } });
+forEachBackend('a rebase that changes the lane tip\'s diff', (backend) => {
+  const git = backend === 'git';
+  const box = sandbox({ config: { ...baseConfig, review: { provider: git ? 'builtin' : 'agent-review' } }, backend });
   after(() => box.cleanup());
 
-  test('moves the lane to the new commits, but not its checks', () => {
+  // jj finds the amended tip by its change id and moves the lane there. git has no change ids, so
+  // the amended tip is a new change: the lane keeps its tip, and the build needs the lane recorded
+  // again. In neither does a check carry over.
+  test(git ? 'loses the amended tip, and none of its checks carry over' : 'moves the lane to the new commits, but not its checks', () => {
     const { ws, tip } = builtRun(box);
-    box.sh(`jj edit ${tip}`, ws);
+    if (!git) box.sh(`jj edit ${tip}`, ws);
     box.write('FEATURES.md', '- Dark mode, remembered per device\n', ws);
-    box.sh('jj new', ws);
-    const changed = box.sh('jj log --no-graph -r @- -T commit_id', ws).trim();
+    box.sh(git ? 'git commit -q -a --amend --no-edit' : 'jj new', ws);
+    const changed = box.head(ws);
     assert.match(box.cli(['rebase', '--run', 'dark', '--tip', changed], { cwd: ws }).out, /1 commit changed/);
-    assert.equal(box.run('dark').lanes.a.tip, changed);
+    assert.equal(box.run('dark').lanes.a.tip, git ? tip : changed);
     const build = box.cli(['build', '--run', 'dark']);
     assert.equal(build.code, 1);
-    assert.match(build.out, /lane a: unit has not run/);
+    assert.match(build.out, git ? /docs: dark mode in the feature list is not in the rebased range/ : /lane a: unit has not run/);
   });
 });
 
-describe('the user runs deploys, and prod is never an agent\'s', () => {
-  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user', allowedWorkflows: ['.github/workflows/lint.yml'] } } });
+forEachBackend('the user runs deploys, and prod is never an agent\'s', (backend) => {
+  const box = sandbox({ config: { ...baseConfig, deploy: { ...baseConfig.deploy, runBy: 'user', allowedWorkflows: ['.github/workflows/lint.yml'] } }, backend });
   after(() => box.cleanup());
 
   test('the deploy command and deploy workflows are refused, and the check hands over the command', () => {
@@ -533,23 +598,25 @@ describe('the user runs deploys, and prod is never an agent\'s', () => {
   });
 });
 
-describe('live play, follow-ups and docs', () => {
-  const box = sandbox({ config: { ...baseConfig, decisions: { file: '../decisions.md' } } });
+forEachBackend('live play, follow-ups and docs', (backend) => {
+  const git = backend === 'git';
+  const box = sandbox({ config: { ...baseConfig, decisions: { file: '../decisions.md' } }, backend });
   after(() => box.cleanup());
 
   test('live play starts only on a deployed build, and each bug ends fixed and shipped or decided', () => {
     const { ws, tip } = builtRun(box);
     assert.match(box.cli(['live-play', 'start', '--run', 'dark', '--prefix', 'LP1']).err, /needs deploy/);
     box.cli(['scan', '--run', 'dark'], { cwd: ws });
-    box.sh('jj bookmark set ci/dark -r @- && jj git push --bookmark ci/dark', ws);
+    box.sh(git ? `git push -q origin ${tip}:refs/heads/ci/dark` : 'jj bookmark set ci/dark -r @- && jj git push --bookmark ci/dark', ws);
     box.ghScript(ciScript(tip));
     box.cli(['ci', '--run', 'dark']);
     box.cli(['review', 'skip', '--run', 'dark', '--reason', 'the user said to skip review for this test']);
     const recorded = box.cli(['deploy', 'record', '--run', 'dark', '--name', 'b1', '--shipped', 'dark mode', '--backup', 'b', '--health', 'healthy', '--load', '1/1', '--http', '200'], { extra: { NOTES: join(box.root, 'n.txt') } });
     assert.equal(recorded.code, 0, recorded.all);
-    box.sh(`jj bookmark set main -r ${tip} && jj git push --bookmark main`);
+    box.setBranch('main', tip);
+    box.pushRaw('main');
     assert.equal(box.cli(['live-play', 'start', '--run', 'dark', '--prefix', 'LP1', '--workspace', ws]).code, 0);
-    box.sh('jj new main', ws);
+    box.sh(git ? 'git checkout -q -B lp1 main' : 'jj new main', ws);
     const fix = box.commit('fix(ui): the toggle remembers its state', { 'src/theme.mjs': 'export const dark = () => Boolean(1);\n' }, ws);
     box.write('../lp1.md', ['| ID | Sev | Area | Bug | Status |', '|---|---|---|---|---|', `| LP1-UI-1 | P2 | settings | toggle forgets | fixed ${fix.slice(0, 12)} |`, '| LP1-UI-2 | P3 | settings | label wording | needs owner: say "Dark" |'].join('\n'));
     const imported = box.cli(['live-play', 'import', '--run', 'dark', '--report', '../lp1.md'], { cwd: ws });
@@ -558,7 +625,8 @@ describe('live play, follow-ups and docs', () => {
     assert.match(imported.out, /LP1-UI-2: needs the owner/);
     box.cli(['decide', '--run', 'dark', '--id', 'LP1-UI-2', '--chose', 'say Dark', '--why', 'shorter on phones', '--rejected', 'Dark mode (wraps at 320 px)']);
     assert.equal(box.cli(['live-play', 'resolve', '--run', 'dark', '--id', 'LP1-UI-2', '--decision', 'LP1-UI-2']).code, 0);
-    box.sh(`jj bookmark set main -r ${fix} && jj git push --bookmark main`);
+    box.setBranch('main', fix);
+    box.pushRaw('main');
     box.cli(['signoff', '--run', 'dark', '--stage', 'live-play', '--item', 'bug-fix-only', '--by', 'owner', '--note', 'both fixes keep documented behavior']);
     const done = box.cli(['live-play', 'done', '--run', 'dark']);
     assert.equal(done.code, 0, done.all);
@@ -577,16 +645,15 @@ describe('live play, follow-ups and docs', () => {
 
 });
 
-describe('docs', () => {
-  const box = sandbox({ config: baseConfig });
+forEachBackend('docs', (backend) => {
+  const box = sandbox({ config: baseConfig, backend });
   after(() => box.cleanup());
 
   test('a feat without the feature list fails the docs check', () => {
     box.write('../dark-spec.md', `The user's words: ${WORDS}\n`);
     box.cli(['intake', '--run', 'nodocs', '--kind', 'fast', '--words', WORDS]);
     box.cli(['spec', '--run', 'nodocs', '--file', '../dark-spec.md']);
-    const ws = join(box.root, 'demo-nodocs');
-    box.sh(`jj workspace add --name demo-nodocs ${ws} -r main`);
+    const ws = box.addLane('demo-nodocs');
     box.cli(['lane', '--run', 'nodocs', '--lane', 'a', '--workspace', ws, '--owns', 'src/**']);
     box.commit('feat(ui): a new switch', { 'src/switch.mjs': 'export const on = 1;\n' }, ws);
     box.cli(['commits', '--run', 'nodocs', '--lane', 'a'], { cwd: ws });
@@ -656,23 +723,23 @@ describe('hooks for agents without them', () => {
   });
 });
 
-describe('the scan reads each commit on its own', () => {
-  const box = sandbox({ config: baseConfig, local: { scan: { private: ['secret-host.example'] } } });
+forEachBackend('the scan reads each commit on its own', (backend) => {
+  const box = sandbox({ config: baseConfig, local: { scan: { private: ['secret-host.example'] } }, backend });
   after(() => box.cleanup());
 
   test('a private string one commit adds and the next removes still refuses the scan, and is never printed', () => {
     const { ws } = builtRun(box);
     box.commit('docs: a note', { 'notes.md': 'see secret-host.example\n' }, ws);
     box.commit('docs: the note without the host', { 'notes.md': 'see the host\n' }, ws);
-    const result = box.cli(['scan', '--run', 'dark', '--tip', '@-'], { cwd: ws });
+    const result = box.cli(['scan', '--run', 'dark', '--tip', backend === 'git' ? 'HEAD' : '@-'], { cwd: ws });
     assert.equal(result.code, 1);
     assert.match(result.out, /error private [0-9a-f]{12} notes.md:1: a string from scan.private/);
     assert.ok(!result.all.includes('secret-host.example'));
   });
 });
 
-describe('CI without a designated workflow', () => {
-  const box = sandbox({ config: { ...baseConfig, ci: { workflow: null } } });
+forEachBackend('CI without a designated workflow', (backend) => {
+  const box = sandbox({ config: { ...baseConfig, ci: { workflow: null } }, backend });
   after(() => box.cleanup());
 
   test('pipeline ci refuses to count any run', () => {
@@ -681,8 +748,8 @@ describe('CI without a designated workflow', () => {
   });
 });
 
-describe('statuses stay on the commit their evidence covers', () => {
-  const box = sandbox({ config: baseConfig });
+forEachBackend('statuses stay on the commit their evidence covers', (backend) => {
+  const box = sandbox({ config: baseConfig, backend });
   after(() => box.cleanup());
 
   test('a new tip gets pending statuses for the stages recorded on the old one', () => {
@@ -693,7 +760,7 @@ describe('statuses stay on the commit their evidence covers', () => {
     const next = box.run('dark').tip;
     assert.notEqual(next, tip);
     assert.equal(box.run('dark').stages.scan.state, 'stale');
-    box.sh('jj bookmark set ci/next -r @- && jj git push -b ci/next', ws);
+    box.sh(backend === 'git' ? `git push -q --no-verify origin ${next}:refs/heads/ci/next` : 'jj bookmark set ci/next -r @- && jj git push -b ci/next', ws);
     box.cli(['mirror', '--run', 'dark'], { cwd: ws });
     const onNext = box.ghCalls().filter((args) => args[0] === 'api' && args[3] === `repos/${SLUG}/statuses/${next}`).map((args) => Object.fromEntries(args.filter((arg, i) => args[i - 1] === '-f').map((field) => field.split(/=(.*)/s).slice(0, 2))));
     assert.deepEqual(onNext.filter((status) => ['pipeline/scan', 'pipeline/build'].includes(status.context)).map((status) => status.state), ['pending', 'pending']);
@@ -701,8 +768,8 @@ describe('statuses stay on the commit their evidence covers', () => {
   });
 });
 
-describe('a review status from GitHub counts only from a trusted writer', () => {
-  const box = sandbox({ config: { ...baseConfig, review: { provider: 'builtin', trustGithubStatus: true } } });
+forEachBackend('a review status from GitHub counts only from a trusted writer', (backend) => {
+  const box = sandbox({ config: { ...baseConfig, review: { provider: 'builtin', trustGithubStatus: true } }, backend });
   after(() => box.cleanup());
 
   test('the newest review status on the tip, set by the repository owner, attests the range', () => {
@@ -718,14 +785,14 @@ describe('a review status from GitHub counts only from a trusted writer', () => 
   });
 });
 
-describe('several lanes integrate into one tip', () => {
-  const box = sandbox({ config: baseConfig });
+forEachBackend('several lanes integrate into one tip', (backend) => {
+  const git = backend === 'git';
+  const box = sandbox({ config: baseConfig, backend });
   after(() => box.cleanup());
 
   test('the build passes only once pipeline integrate records a tip that holds every lane commit', () => {
     const { ws } = builtRun(box);
-    const other = join(box.root, 'demo-dark-b');
-    box.sh(`jj workspace add --name demo-dark-b ${other} -r main`);
+    const other = box.addLane('demo-dark-b');
     assert.equal(box.cli(['lane', '--run', 'dark', '--lane', 'b', '--workspace', other, '--owns', 'lib/**']).code, 0);
     box.commit('fix(lib): a helper', { 'lib/help.mjs': 'export const help = 1;\n' }, other);
     assert.equal(box.cli(['commits', '--run', 'dark', '--lane', 'b'], { cwd: other }).code, 0);
@@ -734,11 +801,18 @@ describe('several lanes integrate into one tip', () => {
     const unintegrated = box.cli(['build', '--run', 'dark']);
     assert.equal(unintegrated.code, 1);
     assert.match(unintegrated.out, /not integrated: stack the lanes and run pipeline integrate/);
-    const laneA = box.sh('jj log --no-graph -r @- -T commit_id', ws).trim();
+    const laneA = box.head(ws);
     assert.match(box.cli(['integrate', '--run', 'dark', '--tip', laneA]).err, /does not hold every lane commit.*lane b/s);
-    const change = box.sh('jj log --no-graph -r @- -T change_id', other).trim();
-    box.sh(`jj rebase -r ${change} -d ${laneA}`);
-    const stacked = box.sh(`jj log --no-graph -r ${change} -T commit_id`).trim();
+    let stacked;
+    if (git) {
+      // The coordinator stacks lane b on lane a in a branch of its own.
+      box.sh(`git switch -q -c int/dark ${laneA} && git cherry-pick ${box.head(other)} >/dev/null`);
+      stacked = box.head();
+    } else {
+      const change = box.sh('jj log --no-graph -r @- -T change_id', other).trim();
+      box.sh(`jj rebase -r ${change} -d ${laneA}`);
+      stacked = box.sh(`jj log --no-graph -r ${change} -T commit_id`).trim();
+    }
     const integrated = box.cli(['integrate', '--run', 'dark', '--tip', stacked]);
     assert.equal(integrated.code, 0, integrated.all);
     assert.equal(box.run('dark').tip, stacked);
@@ -747,20 +821,33 @@ describe('several lanes integrate into one tip', () => {
   });
 });
 
-describe('a fix for a hole live on the server', () => {
+forEachBackend('a fix for a hole live on the server', (backend) => {
   // The lane runs e2e file a only. Deploying without CI needs b too, on the exact tip.
   const checks = { parallel: [{ name: 'unit', run: 'echo "# pass 3"' }], e2e: { command: 'echo "# pass 1 {file}"', files: ['a', 'b'], always: ['a'] }, keepAwake: false };
-  const box = sandbox({ config: { ...baseConfig, push: { public: true }, checks }, local: { scan: { private: ['private-host.example'] } } });
+  const box = sandbox({ config: { ...baseConfig, push: { public: true }, checks }, local: { scan: { private: ['private-host.example'] } }, backend });
   after(() => box.cleanup());
+  const git = backend === 'git';
   let ws;
   let tip;
+  const holePush = () => (git ? `git push origin ${tip}:refs/heads/ci/hole` : 'jj bookmark set ci/hole -r @- && jj git push -b ci/hole');
 
   test('stays off the public remote, by id, by patch-id and by ancestry', () => {
     ({ ws, tip } = builtRun(box, { intake: ['--live-hole'] }));
     assert.equal(box.cli(['scan', '--run', 'dark'], { cwd: ws }).code, 0);
     const LIVE = /fixes a hole that is live on the deployed server/;
-    assert.match(box.gate('jj bookmark set ci/hole -r @- && jj git push -b ci/hole', ws).err, LIVE);
+    assert.match(box.gate(holePush(), ws).err, LIVE);
     // A copy of the fix has new commit ids and the same patch-ids, and a merge carries the fix itself.
+    if (git) {
+      const copies = join(box.root, 'copies');
+      box.sh(`git worktree add -q -b copy ${copies} main && git cherry-pick ${box.parent(tip)} ${tip} >/dev/null`, box.repo);
+      box.sh(`git cherry-pick ${box.parent(tip, ws)} ${tip} >/dev/null`, copies);
+      const copy = box.head(copies);
+      box.cli(['scan', '--run', 'dark', '--tip', copy], { cwd: copies });
+      assert.match(box.gate(`git push origin ${copy}:refs/heads/ci/copy`, copies).err, LIVE);
+      box.sh(`git checkout -q --detach main && git merge -q --no-ff -m "chore: merge" ${tip}`, copies);
+      assert.match(box.gate(`git push origin ${box.head(copies)}:refs/heads/ci/merge`, copies).err, LIVE);
+      return;
+    }
     box.sh(`jj duplicate ${tip} -d main`, ws);
     const copy = box.sh(`jj log --no-graph -r 'children(main) & description(substring:"docs: dark mode") ~ ${tip}' -T commit_id`, ws).trim();
     box.sh(`jj bookmark set ci/copy -r ${copy}`, ws);
@@ -784,38 +871,39 @@ describe('a fix for a hole live on the server', () => {
     assert.equal(ready.code, 0, ready.all);
     const recorded = box.cli(['deploy', 'record', '--run', 'dark', '--name', 'hole', '--shipped', 'the fix', '--backup', 'b', '--health', 'healthy', '--load', '1/1', '--http', '200'], { extra: { NOTES: join(box.root, 'n.txt') } });
     assert.equal(recorded.code, 0, recorded.all);
-    assert.equal(box.gate('jj bookmark set ci/hole -r @- && jj git push -b ci/hole', ws).code, 0);
+    assert.equal(box.gate(holePush(), ws).code, 0);
   });
 });
 
 
-describe('abandoning a run', () => {
-  const box = sandbox({ config: { ...baseConfig, push: { public: true } } });
+forEachBackend('abandoning a run', (backend) => {
+  const git = backend === 'git';
+  const box = sandbox({ config: { ...baseConfig, push: { public: true } }, backend });
   after(() => box.cleanup());
 
   test('records who and why, frees its files, never deploys, and keeps a live hole private', () => {
-    const { ws } = builtRun(box, { intake: ['--live-hole'] });
+    const { ws, tip } = builtRun(box, { intake: ['--live-hole'] });
     assert.match(box.cli(['abandon', '--run', 'dark', '--by', 'owner']).err, /--reason is required/);
     const abandoned = box.cli(['abandon', '--run', 'dark', '--reason', 'the user dropped the toggle', '--by', 'owner']);
     assert.equal(abandoned.code, 0, abandoned.all);
-    assert.match(abandoned.out, /abandoned by owner: the user dropped the toggle[\s\S]*still stay off the public remote[\s\S]*jj workspace forget demo-dark/);
+    assert.match(abandoned.out, git ? /abandoned by owner: the user dropped the toggle[\s\S]*still stay off the public remote[\s\S]*git worktree remove "\S+demo-dark"\n\s+git branch -D lane\/demo-dark/ : /abandoned by owner: the user dropped the toggle[\s\S]*still stay off the public remote[\s\S]*jj workspace forget demo-dark/);
     assert.match(box.cli(['abandon', '--run', 'dark', '--reason', 'again', '--by', 'owner']).err, /already abandoned/);
     assert.equal(box.run('dark').events.at(-1).action, 'abandoned');
     box.cli(['intake', '--run', 'two', '--kind', 'fast', '--words', WORDS]);
     box.cli(['spec', '--run', 'two', '--file', '../dark-spec.md']);
-    box.sh('jj workspace add --name demo-two ../demo-two -r main');
-    const lane = box.cli(['lane', '--run', 'two', '--lane', 'a', '--workspace', join(box.root, 'demo-two'), '--owns', 'src/**']);
+    const lane = box.cli(['lane', '--run', 'two', '--lane', 'a', '--workspace', box.addLane('demo-two'), '--owns', 'src/**']);
     assert.equal(lane.code, 0, lane.all);
     assert.match(box.cli(['deploy', 'check', '--run', 'dark']).out, /was abandoned by owner/);
     assert.doesNotMatch(box.cli(['status']).out, /^dark /m);
     assert.match(box.cli(['status', '--all']).out, /^dark .* abandoned$/m);
     box.cli(['scan', '--run', 'dark'], { cwd: ws });
-    assert.match(box.gate('jj bookmark set ci/hole -r @- && jj git push -b ci/hole', ws).err, /was abandoned, but its commits fix a hole/);
+    assert.match(box.gate(git ? `git push origin ${tip}:refs/heads/ci/hole` : 'jj bookmark set ci/hole -r @- && jj git push -b ci/hole', ws).err, /was abandoned, but its commits fix a hole/);
   });
 });
 
-describe('a live-hole run with a commit no lane made', () => {
-  const box = sandbox({ config: { ...baseConfig, push: { public: true } } });
+forEachBackend('a live-hole run with a commit no lane made', (backend) => {
+  const git = backend === 'git';
+  const box = sandbox({ config: { ...baseConfig, push: { public: true } }, backend });
   after(() => box.cleanup());
 
   test('a copy of the integration commit stays off the public remote too', () => {
@@ -824,32 +912,38 @@ describe('a live-hole run with a commit no lane made', () => {
     const integrated = box.cli(['integrate', '--run', 'dark', '--tip', extra]);
     assert.equal(integrated.code, 0, integrated.all);
     assert.equal(box.cli(['build', '--run', 'dark']).code, 0);
-    box.sh(`jj duplicate ${extra} -d main`);
-    const copy = box.sh(`jj log --no-graph -r 'children(main) & description(substring:"chore: integration note") ~ ${extra}' -T commit_id`).trim();
-    box.sh(`jj bookmark set ci/copy -r ${copy}`);
+    let copy;
+    if (git) {
+      box.sh(`git switch -q -c copy main && git cherry-pick ${extra} >/dev/null`);
+      copy = box.head();
+    } else {
+      box.sh(`jj duplicate ${extra} -d main`);
+      copy = box.sh(`jj log --no-graph -r 'children(main) & description(substring:"chore: integration note") ~ ${extra}' -T commit_id`).trim();
+      box.sh(`jj bookmark set ci/copy -r ${copy}`);
+    }
     const scanned = box.cli(['scan', '--run', 'dark', '--tip', copy]);
     assert.equal(scanned.code, 0, scanned.all);
-    assert.match(box.gate('jj git push -b ci/copy', box.repo).err, /Run dark fixes a hole that is live on the deployed server/);
+    assert.match(box.gate(git ? `git push origin ${copy}:refs/heads/ci/copy` : 'jj git push -b ci/copy', box.repo).err, /Run dark fixes a hole that is live on the deployed server/);
   });
 });
 
-describe('the scan reads commits whatever bytes they hold', () => {
-  const box = sandbox({ config: baseConfig, local: { scan: { private: ['secret-host.example'] } } });
+forEachBackend('the scan reads commits whatever bytes they hold', (backend) => {
+  const box = sandbox({ config: baseConfig, local: { scan: { private: ['secret-host.example'] } }, backend });
   after(() => box.cleanup());
 
   test('a byte that once split records hides nothing: a private string after it is still found', () => {
     const { ws } = builtRun(box);
     box.commit('docs: a framed note', { 'framed.md': 'start\x1e\x1f then secret-host.example\n' }, ws);
     box.commit('docs: a framed message \x1e secret-host.example', {}, ws);
-    const result = box.cli(['scan', '--run', 'dark', '--tip', '@-'], { cwd: ws });
+    const result = box.cli(['scan', '--run', 'dark', '--tip', backend === 'git' ? 'HEAD' : '@-'], { cwd: ws });
     assert.equal(result.code, 1);
     assert.match(result.out, /error private [0-9a-f]{12} framed.md:1: a string from scan.private/);
     assert.match(result.out, /error private [0-9a-f]{12} message: a string from scan.private/);
   });
 });
 
-describe('a build recorded while the lane moves', () => {
-  const box = sandbox({ config: baseConfig });
+forEachBackend('a build recorded while the lane moves', (backend) => {
+  const box = sandbox({ config: baseConfig, backend });
   after(() => box.cleanup());
 
   test('is judged on the run as it is under the lock, not as it was read before', async () => {
@@ -877,8 +971,8 @@ describe('a build recorded while the lane moves', () => {
   });
 });
 
-describe('a live-hole run across a rebase', () => {
-  const box = sandbox({ config: { ...baseConfig, push: { public: true } } });
+forEachBackend('a live-hole run across a rebase', (backend) => {
+  const box = sandbox({ config: { ...baseConfig, push: { public: true } }, backend });
   after(() => box.cleanup());
   let ws;
   let moved;
@@ -887,10 +981,10 @@ describe('a live-hole run across a rebase', () => {
   test('counts only checks that ran on the deploy tip, never lane checks copied onto a rebased one', () => {
     ({ ws } = builtRun(box, { intake: ['--live-hole'] }));
     box.cli(['review', 'skip', '--run', 'dark', '--reason', 'the user said to skip review for this test']);
-    box.commit('chore: unrelated work on main', { 'other.txt': 'x\n' });
-    box.sh('jj bookmark set main -r @- && jj git push --bookmark main');
-    box.sh('jj rebase -b @ -d main', ws);
-    moved = box.sh('jj log --no-graph -r @- -T commit_id', ws).trim();
+    box.setBranch('main', box.commit('chore: unrelated work on main', { 'other.txt': 'x\n' }));
+    box.pushRaw('main');
+    rebaseOntoMain(box, ws);
+    moved = box.head(ws);
     assert.match(box.cli(['rebase', '--run', 'dark', '--tip', moved], { cwd: ws }).out, /2 commits keep their patch-id/);
     assert.ok(box.run('dark').lanes.a.checks.some((result) => result.tip === moved && result.remappedFrom));
     box.cli(['build', '--run', 'dark']);
@@ -904,7 +998,7 @@ describe('a live-hole run across a rebase', () => {
   });
 
   test('keeps trunk private too: moving main before the deploy is publishing the hole', () => {
-    assert.match(box.gate(`jj bookmark set main -r ${moved} && jj git push -b main`, box.repo).err, LIVE);
+    if (backend !== 'git') assert.match(box.gate(`jj bookmark set main -r ${moved} && jj git push -b main`, box.repo).err, LIVE);
     assert.match(box.gate(`git push origin ${moved}:refs/heads/main`, box.repo).err, LIVE);
   });
 
@@ -915,20 +1009,18 @@ describe('a live-hole run across a rebase', () => {
   });
 });
 
-describe('a live-hole run whose fix is amended', () => {
-  const box = sandbox({ config: { ...baseConfig, push: { public: true } } });
+forEachBackend('a live-hole run whose fix is amended', (backend) => {
+  const box = sandbox({ config: { ...baseConfig, push: { public: true } }, backend });
   after(() => box.cleanup());
 
   test('keeps the commit it recorded before the amend private', () => {
     const { ws, tip } = builtRun(box, { intake: ['--live-hole'] });
-    const fix = box.sh(`jj log --no-graph -r '${tip}-' -T commit_id`, ws).trim();
-    box.sh(`jj edit ${fix}`, ws);
-    box.write('src/theme.mjs', 'export const dark = () => 1 === 1;\n', ws);
-    box.sh('jj new && jj edit @- && jj new', ws);
+    const fix = box.parent(tip, ws);
+    rewriteFirst(box, ws, 'src/theme.mjs', 'export const dark = () => 1 === 1;\n');
     box.cli(['commits', '--run', 'dark', '--lane', 'a'], { cwd: ws });
     assert.ok(!box.run('dark').lanes.a.commits.some((commit) => commit.id === fix));
     box.cli(['scan', '--run', 'dark', '--tip', fix], { cwd: ws });
-    assert.match(box.gate(`jj git push --named ci/old=${fix}`, ws).err, /fixes a hole that is live on the deployed server/);
+    assert.match(box.gate(backend === 'git' ? `git push origin ${fix}:refs/heads/ci/old` : `jj git push --named ci/old=${fix}`, ws).err, /fixes a hole that is live on the deployed server/);
   });
 });
 
