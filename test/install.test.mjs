@@ -92,6 +92,12 @@ test('in a git project the hook goes where git looks, and each worktree that loo
   assert.equal(readlinkSync(join(project, '.git', 'hooks', 'pre-push')), join(box.root, 'git-hooks', 'pre-push'));
   assert.match(result.stdout, new RegExp(`note: the worktree ${tree.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} runs hooks from \\S*lane-hooks, not \\S+\\.git/hooks\\. Link the hook there too`));
   assert.doesNotMatch(result.stdout, /jj git push does not run git hooks/);
+  // The printed link runs as written, though the checkout's path holds a space and a quote.
+  const command = /Link the hook there too: (ln -s .*)$/m.exec(result.stdout)[1];
+  mkdirSync(join(box.base, 'lane-hooks'));
+  const ran = spawnSync('sh', ['-c', command], { encoding: 'utf8' });
+  assert.equal(ran.status, 0, ran.stderr);
+  assert.equal(readlinkSync(join(box.base, 'lane-hooks', 'pre-push')), join(box.root, 'git-hooks', 'pre-push'));
 });
 
 test('jj is needed only for jj repositories', () => {

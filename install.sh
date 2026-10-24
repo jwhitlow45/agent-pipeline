@@ -39,6 +39,8 @@ act() {
 }
 # True when the path is there, as a file, a folder or a link, a link to nothing included.
 present() { [ -e "$1" ] || [ -L "$1" ]; }
+# A path quoted for the shell, so a printed command still runs when the path holds a space or a quote.
+quoted() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # Prints the Codex hooks with the CLI path shell-quoted, so a path with a space or a quote still
 # runs. Given a file, it creates that file exclusively instead, so it never writes through a link.
@@ -137,7 +139,7 @@ if [ -n "$PROJECT" ]; then
       [ -d "$tree" ] || continue
       dir=$(git -C "$tree" rev-parse --path-format=absolute --git-path hooks 2>/dev/null || true)
       if [ -n "$dir" ] && [ "$dir" != "$hooks_dir" ]; then
-        say "note: the worktree $tree runs hooks from $dir, not $hooks_dir. Link the hook there too: ln -s $ROOT/git-hooks/pre-push $dir/pre-push"
+        say "note: the worktree $tree runs hooks from $dir, not $hooks_dir. Link the hook there too: ln -s $(quoted "$ROOT/git-hooks/pre-push") $(quoted "$dir/pre-push")"
       fi
     done
   fi
