@@ -115,6 +115,18 @@ describe('git reads give the same bytes under every config and attribute source'
     assert.equal(configHazard(second, { readsOnly: true }), null);
   });
 
+  test('in jj too, since its git ids come from the same read', () => {
+    const info = join(box.repo, '.git', 'info', 'attributes');
+    mkdirSync(dirname(info), { recursive: true });
+    writeFileSync(info, '* -diff\n');
+    try {
+      assert.match(configHazard(box.repo, { readsOnly: true }), /info\/attributes/);
+    } finally {
+      rmSync(info);
+    }
+    assert.equal(configHazard(box.repo, { readsOnly: true }), null);
+  });
+
   test('an octopus merge is refused, since git cannot diff it in full', () => {
     const dir = clone('octopus');
     box.sh(`git checkout -q -b a ${ids.base} && echo a > oa.txt && git add oa.txt && git commit -q -m a && git checkout -q -b b ${ids.base} && echo b > ob.txt && git add ob.txt && git commit -q -m b && git checkout -q -b c ${ids.base} && git merge -q --no-ff --no-commit a b && echo token > added.txt && git add added.txt && git commit -q -m octopus`, dir);
