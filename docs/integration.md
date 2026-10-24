@@ -118,6 +118,8 @@ Reviews recorded on one machine reach another through GitHub: set `review.trustG
 
 The gate is a guardrail for cooperative agents. An agent that means well can still run a gated command by mistake: a deploy, a push, a pull request leaving draft or a merge, before the review and checks it needs. The gate reads each command before it runs, refuses that one, and names the step to run first.
 
+Under `review.provider` `agent-review`, the review checks on pull requests belong to agent-review's own gate, which must be installed and running as a hook. There the pipeline gate does not check review before a pull request opens ready for review, leaves draft, or merges into a branch other than trunk. The same holds under `auto` whenever it picks agent-review, which it does when agent-review's ledger or command is on the machine, whether or not its hook runs. A merge into trunk is a deploy step, and the pipeline gate checks it under any provider.
+
 It is not a security boundary. It does not try to stop an agent that is working to get around it, and it is not a sandbox: a script, a build tool or an interpreter can still run what it likes, and the gate sees none of it. What holds against that is enforced outside the agent's machine: branch protection, required status checks, deploy keys and environment protection rules. A repository that needs a hard boundary must set them. [Section 8](#8-what-github-must-enforce) lists the exact settings, and `pipeline doctor` checks most of them.
 
 ### What it checks an action against
