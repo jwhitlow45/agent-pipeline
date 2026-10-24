@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { tempDir } from './helpers.mjs';
 import { clonesOf, holdsStore, register, registeredRepos } from '../lib/registry.mjs';
 import { detect } from '../lib/vcs-detect.mjs';
+import { agreedRoot, gitVcs } from '../lib/vcs-git.mjs';
 
 const root = realpathSync(tempDir('pipeline-detect-'));
 writeFileSync(join(root, 'gitconfig'), '[user]\n\tname = Test\n\temail = test@example.com\n[init]\n\tdefaultBranch = main\n[protocol "file"]\n\tallow = always\n');
@@ -40,6 +41,7 @@ describe('detect, row by row of the layout table', () => {
   commit(join(root, 'separate'));
   sh('git init -q --bare bare.git');
   sh(`git -C bare.git worktree add -q ${JSON.stringify(join(root, 'bare-wt'))} 2>/dev/null || git -C bare.git worktree add -q --orphan -b main ${JSON.stringify(join(root, 'bare-wt'))}`);
+  commit(join(root, 'bare-wt'));
   sh('git init -q super && git -C super submodule add -q ../main sub');
   sh(`git -C colocated worktree add -q ${JSON.stringify(join(root, 'jj-wt'))} 2>/dev/null || (cd colocated && jj commit -m one && git worktree add -q ${JSON.stringify(join(root, 'jj-wt'))})`);
   const empty = folder('nothing');
@@ -70,6 +72,25 @@ describe('detect, row by row of the layout table', () => {
     }
   }
   test('the empty folder holds nothing', () => assert.equal(detect(empty).backend, null));
+
+  // detect, git's own root and the runner agree for every git layout, from the root and from a
+  // subfolder, even with a GIT_DIR left in the environment, as git exports to hooks.
+  for (const where of ['main', 'linked', 'separate', 'bare-wt', 'super/sub']) {
+    test(`detect, git and the runner agree in ${where}`, () => {
+      for (const dir of [join(root, where), folder(where, 'deeper/still')]) {
+        const want = sh('git rev-parse HEAD', dir);
+        assert.equal(agreedRoot(dir), detect(dir).root);
+        const saved = process.env.GIT_DIR;
+        process.env.GIT_DIR = join(root, 'main', '.git');
+        try {
+          Object.assign(process.env, { GIT_CONFIG_GLOBAL: env.GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM: '1' });
+          assert.deepEqual(gitVcs(dir).revisions('HEAD'), [want]);
+        } finally {
+          if (saved === undefined) delete process.env.GIT_DIR; else process.env.GIT_DIR = saved;
+        }
+      }
+    });
+  }
 });
 
 describe('detect, random nestings', () => {

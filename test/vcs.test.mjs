@@ -1,10 +1,14 @@
 // The version control interface: ranges are values, revisions resolve once, and every operation
 // answers the same for the same history.
 
-import { describe, test, after } from 'node:test';
+import { describe, test, after, before } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { join } from 'node:path';
+import { buildHistory } from './fixtures/history.mjs';
 import { sandbox } from './helpers.mjs';
-import { range, resolveOne, vcsAt } from '../lib/vcs.mjs';
+import { range, resolveOne, RevisionError, vcsAt } from '../lib/vcs.mjs';
+import { gitPatchIds, where } from '../lib/vcs-git.mjs';
 
 const ROOT = '0'.repeat(40);
 
@@ -13,6 +17,7 @@ describe('the vcs interface in jj', () => {
   after(() => box.cleanup());
   // The reads run in this process, so they see the sandbox's jj and git config.
   Object.assign(process.env, box.env);
+  before(() => Object.assign(process.env, box.env));
   const head = (cwd = box.repo) => box.sh('jj log --no-graph -r @- -T commit_id', cwd).trim();
   const merge = (parents, message) => {
     box.sh(`jj new ${parents.join(' ')} -m "$MESSAGE" && jj new`, box.repo, { MESSAGE: message });
@@ -54,5 +59,94 @@ describe('the vcs interface in jj', () => {
 
   test('a trunk never pushed forks at jj\'s root', () => {
     assert.deepEqual(vcs.forkPoint(x1, null), [ROOT]);
+  });
+});
+
+describe('one history read by jj colocated, jj not colocated and plain git', () => {
+  const box = sandbox();
+  after(() => box.cleanup());
+  Object.assign(process.env, box.env);
+  before(() => Object.assign(process.env, box.env));
+  const ids = buildHistory(box);
+  const plainGit = join(box.root, 'plain-git');
+  const plainJj = join(box.root, 'plain-jj');
+  box.sh(`git clone -q ${JSON.stringify(box.bare)} ${JSON.stringify(plainGit)}`, box.root);
+  box.sh(`jj git clone --no-colocate ${JSON.stringify(box.bare)} ${JSON.stringify(plainJj)} 2>/dev/null`, box.root);
+  const backends = { jj: vcsAt(box.repo), 'jj-plain': vcsAt(plainJj), git: vcsAt(plainGit) };
+  const tips = [ids.conflictMerge, ids.x2, ids.y2, ids.orphan];
+  // A record as every backend must give it. Order is only for display, and the patch id is each
+  // backend's own kind.
+  const shape = (commit) => ({ id: commit.id, signature: commit.signature, empty: commit.empty, parents: commit.parents, description: commit.description, files: [...commit.files].sort((a, b) => a.path.localeCompare(b.path)) });
+  const byId = (list) => [...list].sort((a, b) => a.id.localeCompare(b.id));
+  const records = Object.fromEntries(Object.entries(backends).map(([name, vcs]) => [name, vcs.listCommits(range(tips))]));
+  const gitIds = (name) => gitPatchIds(where(backends[name].dir, backends[name].gitDir()), records[name].map((commit) => commit.id), { octopus: 'skip' });
+
+  test('the backends are the ones the folders call for', () => {
+    assert.deepEqual(Object.values(backends).map((vcs) => vcs.backend), ['jj', 'jj', 'git']);
+  });
+
+  test('every record agrees but the change id and the kind of patch id', () => {
+    const want = byId(records.jj).map(shape);
+    assert.equal(want.length, 21);
+    for (const name of ['jj-plain', 'git']) assert.deepEqual(byId(records[name]).map(shape), want, name);
+    assert.ok(records.jj.every((commit) => /^[k-z]{8}$/.test(commit.changeId)));
+    assert.ok(records.git.every((commit) => commit.changeId === null));
+  });
+
+  test('the normalized git id is the same in every backend, and is the git backend\'s own', () => {
+    const want = gitIds('jj');
+    for (const name of ['jj-plain', 'git']) assert.deepEqual(gitIds(name), want, name);
+    for (const commit of records.git) assert.equal(commit.patchId, want.get(commit.id) ?? null, commit.description);
+  });
+
+  test('jj\'s own patch id is read as before', () => {
+    const list = records.jj.filter((commit) => !commit.empty).map((commit) => commit.id);
+    const patches = box.sh(`jj log --no-graph -r '${list.join(' | ')}' -T '"commit " ++ commit_id ++ "\\n"' -p --git`);
+    const before = new Map(spawnSync('git', ['patch-id', '--verbatim'], { input: patches, encoding: 'utf8' }).stdout.split('\n').filter(Boolean).map((line) => line.split(' ').reverse()));
+    for (const commit of records.jj) assert.equal(commit.patchId, before.get(commit.id) ?? null, commit.description);
+  });
+
+  test('the two kinds of id differ for reordered functions and a conflicted merge, and agree for plain edits', () => {
+    const git = gitIds('jj');
+    const jjId = (id) => records.jj.find((commit) => commit.id === id).patchId;
+    for (const id of [ids.reorder, ids.conflictMerge]) assert.notEqual(jjId(id), git.get(id));
+    for (const id of [ids.modify, ids.addDelete, ids.renameEdit, ids.mode, ids.noNewline, ids.cFile, ids.pureRename, ids.binary, ids.base]) assert.equal(jjId(id), git.get(id));
+  });
+
+  test('ranges, fork points, ancestry, presence and files agree', () => {
+    const want = new Set(backends.jj.commitIds(range(tips)));
+    assert.ok(!want.has(ROOT));
+    for (const [name, vcs] of Object.entries(backends)) {
+      assert.deepEqual(new Set(vcs.commitIds(range(tips))), want, name);
+      assert.deepEqual(new Set(vcs.forkPoint(ids.x2, ids.y2)), new Set([ids.x1, ids.y1]), name);
+      assert.deepEqual(vcs.commitIds(range(ids.x2, vcs.forkPoint(ids.x2, ids.y2))), [ids.x2], name);
+      assert.equal(vcs.isAncestor(ids.base, ids.x2), true, name);
+      assert.equal(vcs.isAncestor(ids.orphan, ids.x2), false, name);
+      assert.equal(vcs.exists(ids.orphan), true, name);
+      assert.equal(vcs.exists('f'.repeat(40)), false, name);
+      assert.deepEqual(vcs.filesAt(ids.conflictMerge).sort(), backends.jj.filesAt(ids.conflictMerge).sort(), name);
+      assert.equal(vcs.isOnRemote(ids.x1, 'origin'), true, name);
+      assert.deepEqual(vcs.remoteBranches('origin').map((entry) => `${entry.name} ${entry.target}`).sort(), [`main ${ids.conflictMerge}`, `orphan ${ids.orphan}`, `x2 ${ids.x2}`, `y2 ${ids.y2}`], name);
+      assert.equal(resolveOne(vcs, ids.x1.slice(0, 12)), ids.x1, name);
+    }
+  });
+
+  test('git resolves exactly one commit, and nothing else passes for one', () => {
+    const git = backends.git;
+    assert.deepEqual(git.revisions('HEAD'), [ids.conflictMerge]);
+    // rev-parse --verify exits 0 for ^HEAD and prints ^<id>.
+    assert.throws(() => git.revisions('^HEAD'), RevisionError);
+    assert.throws(() => git.revisions('no-such-branch'), RevisionError);
+    const tree = box.sh('git rev-parse HEAD^{tree}', plainGit).trim();
+    assert.equal(git.exists(tree), false);
+    assert.throws(() => resolveOne(git, tree, '--tip tree'), /--tip tree is not a revision here/);
+  });
+
+  test('git gives every commit\'s pinned diff for the scan, and none for an empty one', () => {
+    const patches = backends.git.commitPatches(range(tips));
+    assert.equal(patches.get(ids.empty), '');
+    assert.equal(patches.get(ids.x2), '');
+    assert.match(patches.get(ids.conflictMerge), /^\+both$/m);
+    assert.match(patches.get(ids.nonAscii), /^\+\+\+ b\/naïve résumé\.txt\t?$/m);
   });
 });
