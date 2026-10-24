@@ -7,7 +7,7 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -93,8 +93,14 @@ export function sandbox({ config = {}, local = null, backend = 'jj' } = {}) {
   writeFileSync(join(repo, '.gitignore'), 'pipeline.local.json\n');
   writeFileSync(join(repo, 'README.md'), '# demo\n');
   if (jjLike) sh('jj commit -m "chore: scaffold" && jj bookmark set main -r @- && jj git push --bookmark main');
-  // A clone records the remote's default branch as origin/HEAD, so the git sandbox does too.
-  else sh('git add -A && git commit -q -m "chore: scaffold" && git push -q origin HEAD:refs/heads/main && git remote set-head origin -a >/dev/null');
+  else {
+    // A clone records the remote's default branch as origin/HEAD, so the git sandbox does too.
+    sh('git add -A && git commit -q -m "chore: scaffold" && git push -q origin HEAD:refs/heads/main && git remote set-head origin -a >/dev/null');
+    // pipeline lane refuses a git worktree that runs no pipeline pre-push hook, so the sandbox links
+    // it where install.sh --project would.
+    mkdirSync(join(repo, '.git', 'hooks'), { recursive: true });
+    symlinkSync(join(ROOT, 'git-hooks', 'pre-push'), join(repo, '.git', 'hooks', 'pre-push'));
+  }
 
   const box = {
     root, repo, bare, env, sh, backend,
